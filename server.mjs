@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import pg from 'pg';
 import {equal,sign,validSession} from './security.mjs';
 import {platform} from './platform.mjs';
-import {layout,loginPage} from './ui.mjs';
+import {layout,loginPage,md} from './ui.mjs';
 const {SESSION_SECRET,APP_ORIGIN='https://study.ziboxiaozhushou.cn'}=process.env;
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD_B64 ? Buffer.from(process.env.ADMIN_PASSWORD_B64,'base64').toString('utf8') : process.env.ADMIN_PASSWORD;
 if(!ADMIN_PASSWORD||!SESSION_SECRET||SESSION_SECRET.length<32)throw Error('Missing secure configuration');
@@ -23,6 +23,11 @@ const server=http.createServer(async(req,res)=>{
  try{
  if(path==='/healthz'&&req.method==='GET'){await pool.query('SELECT 1');return send(res,200,'ok');}
  if(req.method==='GET'&&(path==='/assets/style.css'||path==='/assets/study.js')){const file=path.endsWith('.css')?'style.css':'study.js';return send(res,200,await readFile(new URL('./public/'+file,import.meta.url)),{'Content-Type':file.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8'});}
+ if(req.method==='GET'&&(path==='/sync'||path==='/sync.md')){
+ const guide=await readFile(new URL('./public/course-sync.md',import.meta.url),'utf8');
+ if(path==='/sync.md')return send(res,200,guide,{'Content-Type':'text/plain; charset=utf-8','X-Robots-Tag':'noindex'});
+ return send(res,200,layout('课程同步说明',`<p class="notice">以后告诉 ChatGPT：按 https://study.ziboxiaozhushou.cn/sync 的说明，将本聊天课程同步到网站。</p><p><a href="/sync.md">读取纯文本说明</a></p><div class="reading"><article>${md(guide.replace(/^# .*\n/,''))}</article></div>`),{'X-Robots-Tag':'noindex'});
+ }
  if(req.method==='GET'&&path==='/login')return send(res,200,loginPage());
  if(req.method==='POST'&&req.headers.origin!==APP_ORIGIN)return send(res,403,'来源校验失败');
  if(path==='/login'&&req.method==='POST'){

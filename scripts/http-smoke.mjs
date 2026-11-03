@@ -7,6 +7,14 @@ let logs='';child.stdout.on('data',x=>logs+=x);child.stderr.on('data',x=>logs+=x
 try{
  let ready=false;for(let i=0;i<80;i++){try{ready=(await fetch('http://127.0.0.1:3000/healthz')).ok;}catch{}if(ready)break;await new Promise(r=>setTimeout(r,150));}
  assert.ok(ready,'server did not become ready: '+logs);
+ for(const path of ['/sync','/sync.md']){
+ const response=await fetch('http://127.0.0.1:3000'+path,{redirect:'manual'});
+ assert.equal(response.status,200,'public guide: '+path);
+ const text=await response.text();assert.match(text,/课程同步说明/);assert.match(text,/不授权删除/);
+ assert.match(response.headers.get('content-type'),path.endsWith('.md')?/text\/plain/:/text\/html/);
+ }
+ const protectedPage=await fetch('http://127.0.0.1:3000/manage',{redirect:'manual'});
+ assert.equal(protectedPage.status,303);assert.equal(protectedPage.headers.get('location'),'/login');
  const login=await fetch('http://127.0.0.1:3000/login',{method:'POST',redirect:'manual',headers:{Origin:'http://127.0.0.1:3000','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({password})});
  assert.equal(login.status,303);assert.equal(login.headers.get('location'),'/');const cookie=login.headers.get('set-cookie').split(';')[0];
  for(const path of ['/','/courses','/archive','/manage','/work-test','/assets/style.css','/assets/study.js']){const r=await fetch('http://127.0.0.1:3000'+path,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(r.status,200,path);}
