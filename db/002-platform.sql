@@ -47,3 +47,5 @@ CREATE TABLE IF NOT EXISTS course_requests (
  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','ready')),
  created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE course_requests ADD COLUMN IF NOT EXISTS automation jsonb NOT NULL DEFAULT '{}';

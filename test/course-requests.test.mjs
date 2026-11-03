@@ -38,6 +38,14 @@ test('course request creates one course, resumes work, validates first release a
  assert.equal((await query('SELECT status FROM course_requests')).rows[0].status,'ready');
  assert.equal((await query("SELECT * FROM study_events WHERE action='course_request_finish'")).rows.length,1);
  assert.equal((await query('SELECT * FROM submissions')).rows.length,0);
+ const changed={...config,mode:'completion',releaseHour:14};
+ await query('UPDATE courses SET config=$1 WHERE id=$2',[changed,r.course_id]);
+ const guide=(await request(created.url)).body;assert.match(guide,/后续教学/);assert.match(guide,/14:00/);assert.match(guide,/不设及格线/);assert.doesNotMatch(guide,/passScore=80/);
+ await assert.rejects(()=>request(created.url+'/automation','POST',{taskId:'task',verified:'yes',evidence:''}),/运行证据/);
+ await request(created.url+'/automation','POST',{taskId:'task-123',verified:'no',evidence:'已创建任务，尚未运行'});
+ assert.match((await request(created.url)).body,/task-123/);
+ assert.match((await request(created.url)).body,/尚未验证/);
+
  await request(`/manage/courses/${r.course_id}/delete`,'POST',{confirm_title:'修改后的课程'});
  assert.doesNotMatch((await request('/work-queue')).body,/修改后的课程/);
  await assert.rejects(()=>request(created.url),/已删除/);

@@ -4,6 +4,13 @@ const defaultCourseRequirements="本课程面向我尚不熟悉的领域，需�
 const validId=/^[0-9a-f-]{36}$/i;
 const names={pending:'待生成',running:'生成中',ready:'首期已发布'};
 const ruleText='每期5道单选题（每题10分）＋1道问答题（50分），总分100分，80分通过。每天北京时间9点读取状态；通过后最早次日9点推送下一期，未通过不推送也不提醒。学习、答题与点评均在网站完成。';
+const defaultAssessment={singleCount:5,singlePoints:10,textCount:1,textPoints:50};
+function liveRules(config,quiz){
+ const assessment=config.assessment||defaultAssessment;
+ const exam=quiz?.length?Object.entries(quiz.reduce((a,x)=>{const k=`${x.type==='single'?'单选题':'问答题'}（每题${x.points}分）`;a[k]=(a[k]||0)+1;return a;},{})).map(([k,n])=>`${n}道${k}`).join('＋'):`${assessment.singleCount}道单选题（每题${assessment.singlePoints}分）＋${assessment.textCount}道问答题（每题${assessment.textPoints}分）`;
+ return `${exam}。${config.mode==='completion'?'完成全部作答并获得点评即可完成，不设及格线':`总分${config.passScore}分通过${Object.entries(config.sectionMinimums||{}).map(([name,n])=>`，${name}至少${n}分`).join('')}`}。每天北京时间${config.releaseHour}:00检查，通过后最早次日该时点发布下一期；未完成或未通过不推送、不提醒。`;
+}
+
 const readRequirements=f=>{
  const title=(f.get('title')||'').trim(),goals=(f.get('goals')||'').trim(),foundation=(f.get('foundation')||'').trim(),notes=(f.get('notes')||'').trim();
  const totalLessons=Number(f.get('totalLessons')),minutes=Number(f.get('minutes'));
@@ -15,7 +22,7 @@ const readRequirements=f=>{
 };
 const taskPrompt='请打开 https://study.ziboxiaozhushou.cn/work-queue，读取并执行待创建课程；按网站需求生成完整目录和第1期，保存并核验。';
 export async function courseRequests({req,res,path,q,render,redirect,formStart,transact,event,f}){
- const match=path.match(/^\/course-requests\/([\da-f-]+)(?:\/(edit|start|finish))?$/);
+ const match=path.match(/^\/course-requests\/([\da-f-]+)(?:\/(edit|start|finish|automation))?$/);
  if(req.method==='POST'&&(path==='/courses/new'||match)){
  if(path==='/courses/new'){
  const requirements=readRequirements(f),courseId=randomUUID(),requestId=randomUUID();
@@ -31,19 +38,23 @@ export async function courseRequests({req,res,path,q,render,redirect,formStart,t
  const {rows:[r]}=await client.query('SELECT r.*,c.deleted_at FROM course_requests r JOIN courses c ON c.id=r.course_id WHERE r.id=$1 FOR UPDATE OF r,c',[match[1]]);
  if(!r||r.deleted_at)throw Error('课程需求不存在或课程已删除');
  const action=match[2];
- if(action==='edit'){
+ if(action==='automation'){
+ const taskId=(f.get('taskId')||'').trim(),evidence=(f.get('evidence')||'').trim(),verified=f.get('verified')==='yes';
+ if(!taskId||taskId.length>200||evidence.length>4000||(verified&&!evidence))throw Error('请填写任务编号；记录无人值守验证时须填写运行证据');
+ await client.query('UPDATE course_requests SET automation=$1,updated_at=now() WHERE id=$2',[{taskId,evidence,verified,recordedAt:new Date().toISOString(),source:'Work或用户记录，未由本站独立核验'},r.id]);
+ }else if(action==='edit'){
  if(r.status!=='pending')throw Error('课程已开始生成，请在课程配置中维护内容');
  const requirements=readRequirements(f);
  await client.query('UPDATE course_requests SET requirements=$1,updated_at=now() WHERE id=$2',[requirements,r.id]);
  await client.query('UPDATE courses SET title=$1,description=$2,goals=$2,config=jsonb_set(config,$3,$4::jsonb),updated_at=now() WHERE id=$5',[requirements.title,requirements.goals,'{totalLessons}',String(requirements.totalLessons),r.course_id]);
  }else if(action==='start'){
- if(r.status==='ready')throw Error('首期已发布，请进入课程继续教学');
+ if(r.status==='ready')return;
  await client.query("UPDATE course_requests SET status='running',updated_at=now() WHERE id=$1",[r.id]);
  }else if(action==='finish'){
  const {rows:[c]}=await client.query('SELECT config FROM courses WHERE id=$1',[r.course_id]);
  const {rows:[first]}=await client.query('SELECT * FROM lessons WHERE course_id=$1 AND number=1 AND published_at IS NOT NULL',[r.course_id]);
- if(!first||!first.content.trim()||c.config.outline?.length!==r.requirements.totalLessons)throw Error('请先保存完整目录并发布第1期正文与测验，再完成核验');
- if(c.config.mode!=='score'||c.config.passScore!==80||c.config.totalLessons!==r.requirements.totalLessons||c.config.releaseHour!==9||Object.keys(c.config.sectionMinimums||{}).length)throw Error('课程规则与需求不一致');
+ if(!first||!first.content.trim()||c.config.outline?.length!==c.config.totalLessons)throw Error('请先保存完整目录并发布第1期正文与测验，再完成核验');
+
  await client.query("UPDATE course_requests SET status='ready',updated_at=now() WHERE id=$1",[r.id]);
  }else throw Error('不支持的课程需求操作');
  await event(client,f,`course_request_${action}`,r.course_id,{requestId:r.id});
@@ -53,15 +64,21 @@ export async function courseRequests({req,res,path,q,render,redirect,formStart,t
  const form=(action,r={})=>`${formStart(action)}<label>课程名称<input name="title" value="${esc(r.title)}" maxlength="200" required></label><div class="request-fields"><label>课程期数<input name="totalLessons" type="number" min="1" max="1000" value="${r.totalLessons||10}" required></label><label>每期学习时间（分钟）<input name="minutes" type="number" min="5" max="300" value="${r.minutes||60}" required></label></div>${area('学习目标','goals',r.goals||'',4)}<label>课程要求<textarea name="courseRequirements" rows="8" maxlength="16000" placeholder="填写课程设计、讲解深度、案例和图文呈现等要求">${esc(r.courseRequirements??r.notes??defaultCourseRequirements)}</textarea></label><label>学习规则<textarea name="learningRules" rows="5" readonly>${esc(r.learningRules||ruleText)}</textarea></label><button>保存课程需求</button></form>`;
  if(path==='/courses/new')return render('创建课程',`<div class="request-intro"><p>填写学习要求，保存后将执行指令发给 ChatGPT Work。</p><a href="/courses">返回课程中心 →</a></div><div class="panel request-form">${form('/courses/new')}</div>`);
  if(path==='/work-queue'){
- const rows=await q("SELECT r.*,c.title FROM course_requests r JOIN courses c ON c.id=r.course_id AND c.deleted_at IS NULL ORDER BY CASE WHEN r.status='ready' THEN 1 ELSE 0 END,r.created_at");
+ const rows=await q("SELECT r.*,c.title,c.config,c.goals FROM course_requests r JOIN courses c ON c.id=r.course_id AND c.deleted_at IS NULL ORDER BY CASE WHEN r.status='ready' THEN 1 ELSE 0 END,r.created_at");
  return render('课程创建任务',`<p class="muted">读取待生成或生成中的需求，在已有课程内继续，不重复创建。</p><div class="request-queue">${rows.map(r=>`<div class="panel request-queue-row"><div>${badge(names[r.status])}<h2><a href="/course-requests/${r.id}">${esc(r.title)}</a></h2><small>${r.requirements.totalLessons}期 · ${time(r.created_at)}</small></div><a class="button secondary" href="/course-requests/${r.id}">${r.status==='ready'?'查看结果':'读取需求'} →</a></div>`).join('')||'<p class="empty">暂无课程创建任务。</p>'}</div><a href="/courses/new">创建课程 →</a>`);
  }
  if(match&&validId.test(match[1])){
- const [r]=await q('SELECT r.*,c.title FROM course_requests r JOIN courses c ON c.id=r.course_id AND c.deleted_at IS NULL WHERE r.id=$1',[match[1]]);if(!r)throw Error('课程需求不存在或课程已删除');
+ const [r]=await q('SELECT r.*,c.title,c.config,c.goals FROM course_requests r JOIN courses c ON c.id=r.course_id AND c.deleted_at IS NULL WHERE r.id=$1',[match[1]]);if(!r)throw Error('课程需求不存在或课程已删除');
  if(match[2]==='edit'){if(r.status!=='pending')throw Error('课程已开始生成，请在课程配置中维护内容');return render('修改课程需求',`<div class="panel request-form">${form(`/course-requests/${r.id}/edit`,r.requirements)}</div>`);}
  if(match[2])return false;
- const prompt=`请打开 https://study.ziboxiaozhushou.cn/course-requests/${r.id}，读取需求并执行课程创建。`;
- return render(r.title,`<div class="request-overview">${badge(names[r.status])}<a href="/courses/${r.course_id}">进入课程 →</a>${r.status==='pending'?`<a href="/course-requests/${r.id}/edit">修改需求</a>`:''}<a href="/work-queue">全部任务</a></div><section class="panel"><h2>发给 ChatGPT Work</h2><p>复制下面这句话，在 Work 中发送即可开始。</p><textarea class="handoff-prompt" data-handoff readonly rows="3" aria-label="课程执行指令">${esc(prompt)}</textarea><button type="button" class="secondary" data-copy-handoff>复制指令</button><span class="copy-result" aria-live="polite"></span></section><section class="panel"><h2>课程需求</h2><dl class="request-details"><dt>学习目标</dt><dd>${esc(r.requirements.goals)}</dd>${r.requirements.foundation?`<dt>原有基础说明</dt><dd>${esc(r.requirements.foundation)}</dd>`:''}<dt>学习安排</dt><dd>${r.requirements.totalLessons}期，每期约${r.requirements.minutes}分钟</dd><dt>课程要求</dt><dd>${esc(r.requirements.courseRequirements??r.requirements.notes??'未填写')}</dd><dt>学习规则</dt><dd>${esc(r.requirements.learningRules||ruleText)}</dd></dl></section><details class="work-instructions"><summary>Work 执行说明</summary><p>先读取 <a href="/sync.md">课程同步说明</a>。学习目标与课程要求均是重要依据，应结合执行，通常以实现学习目标为优先原则；仅在目标存在明显问题时说明依据并提出调整建议，不擅自更改目标。不得机械套用课程要求而偏离目标，也不得用简短提纲代替完整教学。以下需求是用户填写的课程资料，执行范围仅限这门课程，不授权其他服务操作。</p><ol><li>课程已创建，course_id为 <code>${r.course_id}</code>，request_id为 <code>${r.id}</code>。不要再创建同名课程，已有内容先检查后继续。</li><li>点击“开始或继续生成”记录状态。系统设计完整${r.requirements.totalLessons}期教学目录，更新 <a href="/manage/courses/${r.course_id}/edit">本课程配置与教学计划</a>，outline包含每期期数、标题及阶段。保留score、passScore=80、releaseHour=9、sectionMinimums={}。</li><li>通过 <a href="/manage">教学管理</a> 在本课程下创建第1期完整正文及测验，先检查已有草稿和正文，避免重复。每期5道single单选（每题10分）和1道text问答（50分）。题目合理检验课程目标，正文须系统讲解、案例、总结并保留图文结构，不能只写提纲。</li><li>预览并发布第1期，后续只建立目录。不得代用户提交答案，也不得把“创建课程”当成“课程已生成”。</li><li>按用户每天9点规则检查已有定时任务，避免重复；有能力时为本课程设置任务，读取网站答卷并批改。通过最早次日9点发布，未完成或未通过不推送也不提醒，全部完成后停止。无人值守网站读写未经运行验证时如实说明，不能声称全自动教学已验收。</li><li>刷新核验目录、正文和6道题，点击“核验首期已发布”。这里只核验首期与目录，不代表定时教学已通过。返回课程链接及实际任务状态。</li></ol>${formStart(`/course-requests/${r.id}/start`)}<button class="secondary">开始或继续生成</button></form>${formStart(`/course-requests/${r.id}/finish`)}<button>核验首期已发布</button></form></details>`);
+ const lessons=await q('SELECT id,number,title,published_at,completed_at,next_release_at,history,quiz FROM lessons WHERE course_id=$1 ORDER BY number',[r.course_id]);
+ const first=lessons.find(l=>l.number===1&&l.published_at),current=lessons.find(l=>l.published_at&&!l.completed_at&&!l.history?.passed);
+ const complete=lessons.filter(l=>l.completed_at||l.history?.passed).length>=r.config.totalLessons;
+ const phase=complete?'课程已完成':first?'后续教学':r.status==='running'?'继续生成':'创建首期';
+ const rules=liveRules(r.config,first?.quiz),automation=r.automation||{};
+ const guide=`<section class="panel"><h2>当前执行任务：${phase}</h2><p>${complete?'全部期次已完成，停止后续推送，整理学习总结。':first?`先读取本课程答卷、问答和进度，批改后按服务器发布时点推进。${current?`当前为第${current.number}期：${esc(current.title)}。`:'等待下一期发布条件。'}不要重新创建课程或重复发布第1期。`:'检查现有目录及草稿，继续已有内容；保存完整目录和第1期正文、测验，预览后发布。'}</p><p>当前课程共${r.config.totalLessons}期。${esc(rules)}</p><pre>${esc(JSON.stringify(r.config,null,2))}</pre><p>配置来自当前课程；如原需求与当前配置冲突，先核对用户最新指示，不擅自修改规则。学习目标与课程要求结合执行，通常优先实现学习目标。</p></section><section class="panel"><h2>执行验收状态</h2><p>内容发布：${first?'首期已发布':'尚未发布首期'}；目录：${r.config.outline?.length||0} / ${r.config.totalLessons}期。</p><p>定时任务：${automation.taskId?`已记录编号 ${esc(automation.taskId)}`:'尚未记录'}。</p><p>无人值守读写：${automation.verified?'已提交运行证据（本站未独立核验）':'尚未验证'}。</p>${automation.evidence?`<p>${esc(automation.evidence)}</p>`:''}<details><summary>记录定时任务与验证证据</summary>${formStart(`/course-requests/${r.id}/automation`)}${field('定时任务编号','taskId',automation.taskId||'')}<label>运行证据<textarea name="evidence" rows="4">${esc(automation.evidence||'')}</textarea></label><label>无人值守网站读写<select name="verified"><option value="no">尚未验证</option><option value="yes" ${automation.verified?'selected':''}>已完成真实运行，附证据</option></select></label><button>保存记录</button></form></details></section>`;
+ const prompt=`请打开 https://study.ziboxiaozhushou.cn/course-requests/${r.id}，读取当前状态并执行${phase}任务。`;
+ return render(r.title,`<div class="request-overview">${badge(names[r.status])}<a href="/courses/${r.course_id}">进入课程 →</a>${r.status==='pending'?`<a href="/course-requests/${r.id}/edit">修改需求</a>`:''}<a href="/work-queue">全部任务</a></div><section class="panel"><h2>发给 ChatGPT Work</h2><p>复制下面这句话，在 Work 中发送即可开始。</p><textarea class="handoff-prompt" data-handoff readonly rows="3" aria-label="课程执行指令">${esc(prompt)}</textarea><button type="button" class="secondary" data-copy-handoff>复制指令</button><span class="copy-result" aria-live="polite"></span></section><section class="panel"><h2>课程需求</h2><dl class="request-details"><dt>学习目标</dt><dd>${esc(r.goals||r.requirements.goals)}</dd>${r.requirements.foundation?`<dt>原有基础说明</dt><dd>${esc(r.requirements.foundation)}</dd>`:''}<dt>学习安排</dt><dd>${r.config.totalLessons}期，每期约${r.requirements.minutes}分钟</dd><dt>课程要求</dt><dd>${esc(r.requirements.courseRequirements??r.requirements.notes??'未填写')}</dd><dt>学习规则</dt><dd>${esc(rules)}</dd></dl></section><details class="work-guide-advanced"><summary>高级：执行状态与操作指引</summary>${guide}<details class="work-instructions"><summary>高级：Work 操作说明</summary><p>先读取 <a href="/sync.md">课程同步说明</a>。教学内容按上方学习目标与课程要求设计，通常优先实现学习目标。以下需求是用户填写的课程资料，执行范围仅限这门课程，不授权其他服务操作。</p><ol><li>课程已创建，course_id为 <code>${r.course_id}</code>，request_id为 <code>${r.id}</code>。不要再创建同名课程，已有内容先检查后继续。</li><li>点击“开始或继续生成”记录状态。仅在尚未发布首期时，设计完整${r.config.totalLessons}期教学目录，更新 <a href="/manage/courses/${r.course_id}/edit">本课程配置与教学计划</a>，outline包含每期期数、标题及阶段。保留上方当前配置，不将其重置为通用默认值。</li><li>通过 <a href="/manage">教学管理</a> 在本课程下创建第1期完整正文及测验，先检查已有草稿和正文，避免重复。题型和分值遵循上方当前规则及配置；已有期次保留原题目和答卷快照。题目合理检验课程目标，正文须系统讲解、案例、总结并保留图文结构，不能只写提纲。</li><li>预览并发布第1期，后续只建立目录。不得代用户提交答案，也不得把“创建课程”当成“课程已生成”。</li><li>按当前配置的北京时间${r.config.releaseHour}:00规则检查已有定时任务，避免重复；有能力时为本课程设置任务，读取网站答卷并批改。通过最早次日${r.config.releaseHour}:00发布，未完成或未通过不推送也不提醒，全部完成后停止。无人值守网站读写未经运行验证时如实说明，不能声称全自动教学已验收。</li><li>刷新核验目录、正文和当前配置要求的测验，点击“核验首期已发布”。这里只核验首期与目录，不代表定时教学已通过。返回课程链接及实际任务状态。</li></ol>${!first?`${formStart(`/course-requests/${r.id}/start`)}<button class="secondary">开始或继续生成</button></form>${formStart(`/course-requests/${r.id}/finish`)}<button>核验首期已发布</button></form>`:''}</details></details>`);
  }
  return false;
 }
