@@ -4,7 +4,9 @@ cd /opt/chen-study
 # 公共仓库无需令牌。每5分钟只读检查，只有最新提交CI通过才部署。
 git fetch origin main --quiet
 sha=$(git rev-parse origin/main)
-[[ "$(git rev-parse HEAD)" != "$sha" ]] || exit 0
+# Source HEAD can advance before a failed/interrupted container build. Check the running image.
+running=$(docker compose exec -T app printenv APP_REVISION 2>/dev/null || true)
+[[ "$running" != "$sha" ]] || exit 0
 payload=$(mktemp)
 trap 'rm -f "$payload"' EXIT
 curl --fail --silent --show-error --connect-timeout 10 --max-time 25 "https://api.github.com/repos/zc202302-lab/chen-study/actions/runs?head_sha=$sha&per_page=30" > "$payload"

@@ -21,6 +21,7 @@ const attempts=new Map();
 const server=http.createServer(async(req,res)=>{
  const path=new URL(req.url,'http://localhost').pathname;
  try{
+ if(path==='/version'&&req.method==='GET')return send(res,200,/^[a-f0-9]{40}$/.test(process.env.APP_REVISION||'')?process.env.APP_REVISION:'unknown',{'Content-Type':'text/plain; charset=utf-8'});
  if(path==='/healthz'&&req.method==='GET'){await pool.query('SELECT 1');return send(res,200,'ok');}
  if(req.method==='GET'&&(path==='/assets/style.css'||path==='/assets/study.js')){const file=path.endsWith('.css')?'style.css':'study.js';return send(res,200,await readFile(new URL('./public/'+file,import.meta.url)),{'Content-Type':file.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8'});}
  if(req.method==='GET'&&(path==='/sync'||path==='/sync.md')){
