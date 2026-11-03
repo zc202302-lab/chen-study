@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-2026-11-03：阶段0基础环境检查完成；尚未部署测试应用。Work 网页读取、写入、定时运行三项验证均未通过，不能进入完整平台开发。服务器内部信息依据用户提供的终端截图，不代表开发环境已取得SSH连接。
+2026-11-03：阶段0完成；阶段1当前Work会话浏览器读取、写入及服务器SQL独立核验通过。定时无人值守浏览器仍未验证。用户已明确要求继续网站开发，v0.2功能与部署脚本已实现并提交，正式服务器升级待执行。服务器内部信息依据用户提供的终端截图，开发环境仍无SSH连接。
 
 ## 已核实环境
 
@@ -21,9 +21,9 @@
 | 入口网络 | sms-relay_default，网关172.19.0.1 |
 | 现有Compose文件 | /opt/sms-relay/compose.yml |
 
-现有路由：sms.ziboxiaozhushou.cn → ntfy:80；assistant.ziboxiaozhushou.cn → 172.19.0.1:8010；jituan.zbassistant.site指定路径 → 8010、其余404；cook.ziboxiaozhushou.cn → 172.19.0.1:8020。8010/8020由宿主机uvicorn进程监听。Study域名尚未配置。
+现有路由：sms.ziboxiaozhushou.cn → ntfy:80；assistant.ziboxiaozhushou.cn → 172.19.0.1:8010；jituan.zbassistant.site指定路径 → 8010、其余404；cook.ziboxiaozhushou.cn → 172.19.0.1:8020。8010/8020由宿主机uvicorn进程监听。Study域名后续已接入且HTTPS访问通过。
 
-当前Work云端浏览器已实际导航到/work-test，但只取得上游连接错误；这不证明原服务器宕机，也不证明Work读写可行。当前执行环境SSH连接返回Network is unreachable。
+初期/work-test出现上游连接错误；后经Caddy自动重试完成证书签发，HTTPS、登录及测试读写已通过。执行环境SSH连接仍返回Network is unreachable。
 
 ## 部署候选方案
 
@@ -101,3 +101,4 @@ update.sh先备份数据库，再执行兼容式数据库结构扩展，只更�
 日志及状态：`docker compose ps`、`docker compose logs --tail=80 app db`、`systemctl list-timers chen-study-*`、`journalctl -u chen-study-update.service -n 50 --no-pager`。升级失败应保留日志，禁止清理其他项目或共享Caddy证书。
 
 本地验收使用PGlite（PostgreSQL引擎）验证SQL、学习全流程、重复提交、分项判分和隔日发布；生产连接并发锁、容器资源、HTTPS、手机布局、自动备份/更新、定时Work浏览器仍须生产实测。当前Work会话浏览器读写已于2026-11-03完成，服务器SQL独立确认work-test-001为completed、版本1；操作编号91b160d6-f618-4b55-9fb8-f14d0900b6c9。本版功能部署结果必须以实际运行输出为准。
+
