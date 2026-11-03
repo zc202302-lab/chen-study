@@ -35,3 +35,6 @@ CREATE TABLE IF NOT EXISTS lesson_versions (
 );
 
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS config_snapshot jsonb;
+
+-- Historical records preserve date-only evidence without invented submission/completion timestamps.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS history jsonb;

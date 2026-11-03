@@ -57,3 +57,34 @@ test('database-backed publish, submit, review, duplicate protection, questions, 
  assert.doesNotMatch((await request(`/courses/${other}?tab=quiz`)).body,/测试期数/);
 
 });
+
+test('date-only history import preserves evidence, rejects overwrites and supplies unpublished outline',async(t)=>{
+ const db=new PGlite();t.after(()=>db.close());await db.exec(await readFile(new URL('../db/002-platform.sql',import.meta.url),'utf8'));
+ const query=async(sql,args)=>{if(sql.includes('pg_advisory_xact_lock'))return {rows:[],rowCount:1};const r=await db.query(sql,args);return {...r,rowCount:/^\s*SELECT/i.test(sql)?r.rows.length:(r.affectedRows??r.rows.length)};};
+ const pool={query,connect:async()=>({query,release(){}})};
+ async function request(path,method='GET',data={}){const f=new URLSearchParams({...data,csrf:'csrf',operation_id:data.operation_id||randomUUID()});let result={};await platform({req:{method,url:path},res:{},path:path.split('?')[0],pool,csrf:'csrf',send:(_r,status,body)=>{result={status,body};},redirect:(_r,url)=>{result={status:303,url};},form:async()=>f});return result;}
+ const c=randomUUID(),l=randomUUID();const config={mode:'score',passScore:80,sectionMinimums:{实战:30},totalLessons:2,releaseHour:9,outline:[{number:1,title:'历史课',stage:'基础'},{number:2,title:'未发布目录项',stage:'基础'}]};
+ await query('INSERT INTO courses(id,title,category,description,goals,config) VALUES($1,$2,$3,$4,$5,$6)',[c,'历史测试','测试','简介','目标',config]);
+ await query('INSERT INTO lessons(id,course_id,number,stage,title,content,quiz,published_at) VALUES($1,$2,1,$3,$4,$5,$6,now())',[l,c,'基础','历史课','完整正文',JSON.stringify(quiz)]);
+ const op=randomUUID(),data={date:'2020-01-01',source:'历史聊天正式答卷及批改',answers:JSON.stringify({q1:0,q2:'原始回答'}),review:JSON.stringify(review),operation_id:op};
+ await request(`/manage/lessons/${l}/history`,'POST',data);
+ await request(`/manage/lessons/${l}/history`,'POST',data);
+ const {rows:[record]}=await query('SELECT * FROM lessons WHERE id=$1',[l]);
+ assert.equal(record.completed_at,null);assert.equal(record.history.date,'2020-01-01');assert.equal(record.history.score,82);assert.equal(record.history.passed,true);
+ assert.equal(new Date(record.next_release_at).toISOString(),'2020-01-02T01:00:00.000Z');
+ assert.equal((await query('SELECT * FROM submissions')).rows.length,0);
+ assert.equal((await query('SELECT * FROM study_events')).rows.length,1);
+ await assert.rejects(()=>request(`/manage/lessons/${l}/history`,'POST',{...data,operation_id:randomUUID()}),/不能覆盖/);
+ await assert.rejects(()=>request(`/lessons/${l}/submit`,'POST',{answer_q1:'0',answer_q2:'新的回答'}),/不可提交/);
+ const lesson=(await request(`/lessons/${l}`)).body;
+ assert.match(lesson,/82 \/ 100/);assert.match(lesson,/原始回答/);assert.match(lesson,/2020-01-01（历史记录迁移，原时刻不详）/);assert.match(lesson,/未发布目录项/);assert.doesNotMatch(lesson,/data-quiz/);
+ const progress=(await request(`/courses/${c}?tab=progress`)).body;assert.match(progress,/已完成 1 \/ 2/);assert.match(progress,/未发布目录项/);
+ assert.doesNotMatch((await request('/')).body,/历史课<\/a>/);
+ assert.match((await request(`/courses/${c}?tab=quiz`)).body,/已完成/);
+ assert.match((await request('/archive')).body,/历史迁移/);
+ // Invalid dates and contradictory single-choice scores cannot create records.
+ const bad=randomUUID();await query('INSERT INTO lessons(id,course_id,number,stage,title,content,quiz,published_at) VALUES($1,$2,2,$3,$4,$5,$6,now())',[bad,c,'基础','另一课','正文',JSON.stringify(quiz)]);
+ await assert.rejects(()=>request(`/manage/lessons/${bad}/history`,'POST',{...data,date:'2020-02-31',operation_id:randomUUID()}),/真实/);
+ await assert.rejects(()=>request(`/manage/lessons/${bad}/history`,'POST',{...data,answers:JSON.stringify({q1:1,q2:'原回答'}),operation_id:randomUUID()}),/得分与答案不一致/);
+ assert.equal((await query('SELECT history FROM lessons WHERE id=$1',[bad])).rows[0].history,null);
+});

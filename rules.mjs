@@ -8,6 +8,10 @@ export function validateConfig(c){
  if(c.mode==='score'&&(!Number.isFinite(c.passScore)||c.passScore<0||c.passScore>100))throw Error('及格分数须为0至100');
  if(!Number.isInteger(c.releaseHour)||c.releaseHour<0||c.releaseHour>23)throw Error('发布时间须为0至23点（北京时间）');
  if(c.sectionMinimums!==undefined&&(!c.sectionMinimums||typeof c.sectionMinimums!=='object'||Array.isArray(c.sectionMinimums)||Object.values(c.sectionMinimums).some(n=>!Number.isFinite(n)||n<0||n>100)))throw Error('分项最低分配置无效');
+ if(c.outline!==undefined){
+ if(!Array.isArray(c.outline)||c.outline.length>c.totalLessons)throw Error('教学目录须为期次列表');
+ const ids=new Set();for(const x of c.outline){if(!x||!Number.isInteger(x.number)||x.number<1||x.number>c.totalLessons||ids.has(x.number)||typeof x.title!=='string'||!x.title.trim()||typeof x.stage!=='string')throw Error('目录编号、标题或阶段无效');ids.add(x.number);}
+ }
  return c;
 }
 export function validateQuiz(q){
