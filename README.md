@@ -71,3 +71,5 @@ bash scripts/bootstrap.sh
 独立核验：`bash scripts/verify-db.sh`。查看状态：`docker compose ps`；查看故障：`docker compose logs --tail=80 app db`。不要发送.env内容。备份目录包含既有Caddy配置，须保持私有，不提交GitHub。脚本不删除任何卷、不停止既有项目；健康检查、真实HTTPS访问及已有站点回归需根据实际返回值判定。
 
 通信验证：Work在/work-test登录，读取课程work-test-001，点击完成按钮，刷新核对记录版本和操作编号，再由服务器SQL核验。每日09:00任务须实际执行后方可验收；页面上的下一期解锁仅为测试标记，尚未实现正式发布规则。测试日志包含记录时间，不将页面登录会话误认为已证实定时可用。
+
+管理密码不限制长度或字符类型，仅要求非空单行内容。新安装以Base64编码保存到权限受限的.env（编码不是加密），避免美元符号、引号、空格、反斜杠或中文被Compose误解析。已有ADMIN_PASSWORD配置继续兼容，不自动更改已有密码。

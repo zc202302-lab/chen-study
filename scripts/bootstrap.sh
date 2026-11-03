@@ -7,11 +7,11 @@ command -v curl >/dev/null
 docker network inspect sms-relay_default >/dev/null
 docker inspect sms-relay-caddy-1 >/dev/null
 if [[ ! -f .env ]]; then
-  read -rsp '设置测试管理密码（至少16位，仅在服务器输入）: ' study_admin
+  read -rsp '设置测试管理密码（非空，不限长度和字符类型，仅在服务器输入）: ' study_admin
   echo
-  [[ ${#study_admin} -ge 16 && "$study_admin" =~ ^[a-zA-Z0-9._@%+-]+$ ]] || { echo '请使用至少16位字母、数字或 . _ @ % + -'; exit 1; }
+  [[ -n "$study_admin" ]] || { echo '管理密码不能为空'; exit 1; }
   umask 077
-  { printf 'ADMIN_PASSWORD=%s\n' "$study_admin"; printf 'DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"; printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)"; } > .env
+  { printf 'ADMIN_PASSWORD_B64=%s\n' "$(printf '%s' "$study_admin" | openssl base64 -A)"; printf 'DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"; printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)"; } > .env
   unset study_admin
 fi
 docker compose config --quiet

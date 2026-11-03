@@ -28,7 +28,8 @@ services:
       PGUSER: study
       PGDATABASE: study
       PGPASSWORD: ${DB_PASSWORD:?Run bootstrap first}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run bootstrap first}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_B64: ${ADMIN_PASSWORD_B64:-}
       SESSION_SECRET: ${SESSION_SECRET:?Run bootstrap first}
       APP_ORIGIN: https://study.ziboxiaozhushou.cn
     networks:
