@@ -3,24 +3,27 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import pg from 'pg';
 import {equal,sign,validSession} from './security.mjs';
+import {platform} from './platform.mjs';
+import {layout} from './ui.mjs';
 const {SESSION_SECRET,APP_ORIGIN='https://study.ziboxiaozhushou.cn'}=process.env;
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD_B64 ? Buffer.from(process.env.ADMIN_PASSWORD_B64,'base64').toString('utf8') : process.env.ADMIN_PASSWORD;
 if(!ADMIN_PASSWORD||!SESSION_SECRET||SESSION_SECRET.length<32)throw Error('Missing secure configuration');
 const pool=new pg.Pool({max:4,connectionTimeoutMillis:5000,statement_timeout:8000});
 pool.on('error',()=>console.error('database_pool_error'));
 await pool.query(await readFile(new URL('./db/001-probe.sql',import.meta.url),'utf8'));
+await pool.query(await readFile(new URL('./db/002-platform.sql',import.meta.url),'utf8'));
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const page=(title,body)=>`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} · Chen Study</title><style>body{margin:0;background:#f5f6f8;color:#182332;font:17px/1.8 system-ui,sans-serif}main{max-width:800px;margin:48px auto;padding:28px;background:white}h1{font-size:27px}h2{font-size:21px}table{width:100%;border-collapse:collapse}td,th{text-align:left;border-bottom:1px solid #ddd;padding:10px}input,button{font:inherit;padding:10px;max-width:100%;box-sizing:border-box}button{background:#245b88;color:white;border:0;cursor:pointer}label{display:block}small{color:#546375}a{color:#245b88}@media(max-width:600px){main{margin:0;padding:20px}table{font-size:14px}}</style><main><small>CHEN STUDY / 阶段1通信验证</small><h1>${title}</h1>${body}</main></html>`;
-function send(res,status,body,headers={}){res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",...headers});res.end(body);}
+function send(res,status,body,headers={}){res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",...headers});res.end(body);}
 function redirect(res,path,headers={}){send(res,303,'',{Location:path,...headers});}
-async function form(req){let text='';for await(const part of req){text+=part;if(Buffer.byteLength(text)>8192)throw Error('body_limit');}return new URLSearchParams(text);}
+async function form(req){const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>1048576)throw Error('提交内容超过1MB');parts.push(part);}return new URLSearchParams(Buffer.concat(parts).toString('utf8'));}
 const attempts=new Map();
 const server=http.createServer(async(req,res)=>{
  const path=new URL(req.url,'http://localhost').pathname;
  try{
  if(path==='/healthz'&&req.method==='GET'){await pool.query('SELECT 1');return send(res,200,'ok');}
- if(req.method==='GET'&&path==='/')return redirect(res,'/work-test');
- if(req.method==='GET'&&path==='/login')return send(res,200,page('管理登录','<p>仅包含虚构测试数据。请使用服务器上设置的测试管理密码。</p><form method="post" action="/login"><label>管理密码<input name="password" type="password" autocomplete="current-password" required></label><button>登录</button></form>'));
+ if(req.method==='GET'&&(path==='/assets/style.css'||path==='/assets/study.js')){const file=path.endsWith('.css')?'style.css':'study.js';return send(res,200,await readFile(new URL('./public/'+file,import.meta.url)),{'Content-Type':file.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8'});}
+ if(req.method==='GET'&&path==='/login')return send(res,200,page('管理登录','<p>个人课程学习平台。请使用服务器上设置的管理密码。</p><form method="post" action="/login"><label>管理密码<input name="password" type="password" autocomplete="current-password" required></label><button>登录</button></form>'));
  if(req.method==='POST'&&req.headers.origin!==APP_ORIGIN)return send(res,403,'来源校验失败');
  if(path==='/login'&&req.method==='POST'){
  const address=req.socket.remoteAddress,now=Date.now();let a=attempts.get(address);
@@ -28,7 +31,7 @@ const server=http.createServer(async(req,res)=>{
  if(++a.count>20)return send(res,429,'尝试过多，请十分钟后再试');
  const f=await form(req);if(!equal(f.get('password'),ADMIN_PASSWORD))return send(res,401,page('登录失败','<a href="/login">重新登录</a>'));
  attempts.delete(address);const raw=`${Date.now()+7*86400000}.${randomBytes(16).toString('hex')}`;
- return redirect(res,'/work-test',{'Set-Cookie':`study_session=${raw}.${sign(raw,SESSION_SECRET)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`});
+ return redirect(res,'/',{'Set-Cookie':`study_session=${raw}.${sign(raw,SESSION_SECRET)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`});
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('study_session='))?.slice(14);
  if(!validSession(token,SESSION_SECRET))return redirect(res,'/login');
@@ -55,8 +58,9 @@ const server=http.createServer(async(req,res)=>{
  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
  return redirect(res,'/work-test');
  }
- send(res,404,'Not Found');
- }catch(e){console.error(JSON.stringify({event:'request_failed',path,code:e.code||'internal_error'}));send(res,503,page('操作未确认成功','<p>服务器处理失败，请检查应用日志及数据库。不要把本次操作视为成功。</p>'));}
+ const handled=await platform({req,res,path,pool,csrf:sign(token,SESSION_SECRET),send,redirect,form});
+ if(handled===false)send(res,404,layout('页面不存在','<a href="/">返回学习首页</a>'));
+ }catch(e){console.error(JSON.stringify({event:'request_failed',path,code:e.code||'internal_error'}));if(path==='/healthz')return send(res,503,'database unavailable');const message=e.code?'数据库处理失败，请检查日志。':e.message;send(res,400,layout('操作未完成',`<p class="notice error">${esc(message)}</p><p>本次事务未提交。请返回原页面检查内容后重试。</p><a href="/manage">返回教学管理</a> · <a href="/">学习首页</a>`));}
 });
 server.requestTimeout=15000;server.listen(3000,'0.0.0.0');
 process.on('SIGTERM',()=>server.close(async()=>{await pool.end();process.exit(0);}));

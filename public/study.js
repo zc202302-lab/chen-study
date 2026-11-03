@@ -1,0 +1,2 @@
+const quiz=document.querySelector('[data-quiz]');
+if(quiz){const groups=[...quiz.querySelectorAll('fieldset')];const button=quiz.querySelector('button[type=submit]');const progress=quiz.querySelector('[data-progress]');function update(){const answered=groups.filter(g=>{const input=g.querySelector('textarea');return input?input.value.trim():g.querySelector('input:checked');}).length;progress.textContent=`已完成 ${answered} / ${groups.length} 题`;button.disabled=answered!==groups.length;}quiz.addEventListener('input',update);quiz.addEventListener('change',update);update();}

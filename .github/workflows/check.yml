@@ -5,6 +5,17 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: study
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_DB: study
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U study -d study"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -13,6 +24,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: node --check server.mjs
-      - run: bash -n scripts/bootstrap.sh scripts/connect-caddy.sh scripts/verify-db.sh
+      - run: node scripts/http-smoke.mjs
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: study
+          PGPASSWORD: ci-test-only
+          PGDATABASE: study
+      - run: node --check server.mjs && node --check platform.mjs && node --check public/study.js
+      - run: bash -n scripts/*.sh
       - run: docker build -t chen-study-probe:check .

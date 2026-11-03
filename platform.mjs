@@ -1,0 +1,126 @@
+import {randomUUID} from 'node:crypto';
+import {esc,md,time,badge,layout,hidden,field,area} from './ui.mjs';
+import {nextRelease,validateConfig,validateQuiz,validateAnswers,validateReview} from './rules.mjs';
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const empty=s=>`<p class="empty">${s}</p>`;
+const error=s=>{throw new Error(s);};
+const status=l=>l.completed_at?'已完成':l.published_at?'学习中':'待发布';
+const sampleConfig={mode:'completion',totalLessons:10,releaseHour:9,sectionMinimums:{}};
+const sampleQuiz=[{id:'q1',type:'single',prompt:'示例题干，请替换为正式课程题目。',options:['选项一','选项二'],correct:0,points:100,section:'基础知识',explanation:'请填写标准解析'}];
+export async function platform({req,res,path,pool,csrf,send,redirect,form}){
+ const q=async(sql,args=[])=> (await pool.query(sql,args)).rows;
+ const render=(title,body)=>send(res,200,layout(title,body));
+ const formStart=action=>`<form method="post" action="${action}">${hidden(csrf,randomUUID())}`;
+ const event=async(client,f,action,subject,details={})=>client.query('INSERT INTO study_events(id,operation_id,action,subject_id,details) VALUES($1,$2,$3,$4,$5)',[randomUUID(),f.get('operation_id'),action,subject,details]);
+ const transact=async(f,fn)=>{
+ if(!uuid.test(f.get('operation_id')||''))error('操作编号无效');
+ const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT pg_advisory_xact_lock(731104)");
+ const exists=await c.query('SELECT 1 FROM study_events WHERE operation_id=$1',[f.get('operation_id')]);
+ if(!exists.rowCount)await fn(c);
+ await c.query('COMMIT');}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
+ };
+ const getLesson=async(id)=>{const rows=await q('SELECT l.*,c.title course_title,c.config,c.status course_status FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.id=$1',[id]);return rows[0]||error('课时不存在');};
+ const courseRows=cs=>cs.map(c=>`<div class="row"><div><small>${esc(c.category)} · ${c.config.totalLessons}期</small><h3><a href="/courses/${c.id}">${esc(c.title)}</a></h3><p class="muted">${esc(c.description)}</p></div><div>${badge(`${c.completed_count||0} / ${c.config.totalLessons} 已完成`)}<p><small>更新 ${time(c.updated_at)}</small></p></div></div>`).join('');
+ const quizRows=rows=>rows.map(r=>`<div class="row"><div><small>${esc(r.course_title)}</small><h3><a href="/lessons/${r.id}#quiz">第${r.number}期 · ${esc(r.title)}</a></h3></div>${badge(r.reviewed_at?'已点评':r.submitted_at?'待批改':'待答题')}</div>`).join('');
+ const courseQuery=`SELECT c.*, (SELECT count(*)::int FROM lessons l WHERE l.course_id=c.id AND l.completed_at IS NOT NULL) completed_count FROM courses c`;
+ if(req.method==='POST'){
+ const f=await form(req);if(f.get('csrf')!==csrf)error('页面已过期，请刷新后重试');
+ if(path==='/manage/courses'){
+ const config=validateConfig(JSON.parse(f.get('config')||'{}'));const title=f.get('title')?.trim();if(!title)error('课程名称不能为空');
+ await transact(f,async c=>{const id=randomUUID();await c.query('INSERT INTO courses(id,title,category,description,goals,config) VALUES($1,$2,$3,$4,$5,$6)',[id,title,f.get('category'),f.get('description'),f.get('goals'),config]);await event(c,f,'course_created',id);});return redirect(res,'/courses');
+ }
+ let edit=path.match(/^\/manage\/courses\/([\da-f-]+)\/edit$/);
+ if(edit&&uuid.test(edit[1])){
+ const config=validateConfig(JSON.parse(f.get('config')||'{}'));if(!f.get('title')?.trim())error('课程名称不能为空');
+ await transact(f,async c=>{const {rows:[old]}=await c.query('SELECT * FROM courses WHERE id=$1 FOR UPDATE',[edit[1]]);if(!old)error('课程不存在');const {rows:[max]}=await c.query('SELECT coalesce(max(number),0) n FROM lessons WHERE course_id=$1',[old.id]);if(config.totalLessons<max.n)error('总期数不能小于已有课时编号');await c.query('UPDATE courses SET title=$1,category=$2,description=$3,goals=$4,config=$5,updated_at=now() WHERE id=$6',[f.get('title'),f.get('category'),f.get('description'),f.get('goals'),config,old.id]);await event(c,f,'course_updated',old.id,{previousConfig:old.config});});return redirect(res,'/manage');
+ }
+ edit=path.match(/^\/manage\/lessons\/([\da-f-]+)\/edit$/);
+ if(edit&&uuid.test(edit[1])){
+ const quiz=validateQuiz(JSON.parse(f.get('quiz')||'[]'));if(!f.get('title')?.trim()||!f.get('content')?.trim())error('课时标题与正文不能为空');
+ await transact(f,async c=>{const {rows:[old]}=await c.query('SELECT * FROM lessons WHERE id=$1 FOR UPDATE',[edit[1]]);if(!old)error('课时不存在');if(old.published_at){const {rows:[same]}=await c.query('SELECT $1::jsonb=$2::jsonb same',[JSON.stringify(old.quiz),JSON.stringify(quiz)]);if(!same.same)error('已发布测验不可更改，请保留历史题目');}await c.query('INSERT INTO lesson_versions(lesson_id,revision,snapshot) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[old.id,old.revision,old]);await c.query('UPDATE lessons SET stage=$1,title=$2,content=$3,quiz=$4,revision=revision+1 WHERE id=$5',[f.get('stage'),f.get('title'),f.get('content'),JSON.stringify(quiz),old.id]);await c.query('UPDATE courses SET updated_at=now() WHERE id=$1',[old.course_id]);await event(c,f,'lesson_updated',old.id,{previousRevision:old.revision});});return redirect(res,'/manage');
+ }
+ if(path==='/manage/lessons'){
+ const course=f.get('course_id');if(!uuid.test(course))error('请选择课程');const number=Number(f.get('number')),quiz=validateQuiz(JSON.parse(f.get('quiz')||'[]'));if(!Number.isInteger(number)||number<1||!f.get('title')?.trim()||!f.get('content')?.trim())error('课时编号、标题或正文无效');
+ await transact(f,async c=>{const {rows:[courseRow]}=await c.query('SELECT * FROM courses WHERE id=$1 FOR UPDATE',[course]);if(!courseRow||number>courseRow.config.totalLessons)error('课时超出课程配置范围');const id=randomUUID();await c.query('INSERT INTO lessons(id,course_id,number,stage,title,content,quiz) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,course,number,f.get('stage'),f.get('title'),f.get('content'),JSON.stringify(quiz)]);await event(c,f,'lesson_drafted',id);});return redirect(res,'/manage');
+ }
+ let m=path.match(/^\/manage\/lessons\/([\da-f-]+)\/publish$/);
+ if(m&&uuid.test(m[1])){
+ await transact(f,async c=>{const {rows:[l]}=await c.query('SELECT l.*,c.config,c.status course_status FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.id=$1 FOR UPDATE OF l,c',[m[1]]);if(!l)error('课时不存在');if(l.course_status!=='active')error('课程未处于学习中');if(l.published_at)error('已经发布，无需重复发布');
+ if(l.number>1){const {rows:[prev]}=await c.query('SELECT * FROM lessons WHERE course_id=$1 AND number=$2',[l.course_id,l.number-1]);if(!prev?.completed_at||!prev.next_release_at||new Date(prev.next_release_at)>new Date())error('上一期未完成，或尚未到下一个北京时间发布时点');}
+ await c.query('UPDATE lessons SET published_at=now() WHERE id=$1',[l.id]);await c.query('UPDATE courses SET updated_at=now() WHERE id=$1',[l.course_id]);await event(c,f,'lesson_published',l.id,{number:l.number});});return redirect(res,'/manage');
+ }
+ m=path.match(/^\/lessons\/([\da-f-]+)\/submit$/);
+ if(m&&uuid.test(m[1])){
+ await transact(f,async c=>{const {rows:[l]}=await c.query('SELECT l.*,c.config FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.id=$1 FOR UPDATE OF l,c',[m[1]]);if(!l?.published_at||l.completed_at)error('当前课时不可提交');const {rowCount}=await c.query('SELECT 1 FROM submissions WHERE lesson_id=$1 AND reviewed_at IS NULL',[l.id]);if(rowCount)error('已有待批改答卷，请等待点评');const answers={};for(const x of l.quiz){answers[x.id]=x.type==='single'?Number(f.get(`answer_${x.id}`)):f.get(`answer_${x.id}`);if(x.type==='single'&&!f.has(`answer_${x.id}`))answers[x.id]=null;}validateAnswers(l.quiz,answers);const id=randomUUID();await c.query('INSERT INTO submissions(id,lesson_id,operation_id,lesson_revision,quiz_snapshot,answers,config_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,l.id,f.get('operation_id'),l.revision,JSON.stringify(l.quiz),answers,l.config]);await event(c,f,'quiz_submitted',id);});return redirect(res,`/lessons/${m[1]}#quiz`);
+ }
+ m=path.match(/^\/manage\/submissions\/([\da-f-]+)\/review$/);
+ if(m&&uuid.test(m[1])){
+ const review=JSON.parse(f.get('review')||'{}');
+ await transact(f,async c=>{const {rows:[s]}=await c.query('SELECT * FROM submissions WHERE id=$1 FOR UPDATE',[m[1]]);if(!s||s.reviewed_at)error('答卷不存在或已经批改');const {rows:[l]}=await c.query('SELECT l.*,c.config FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.id=$1 FOR UPDATE OF l,c',[s.lesson_id]);const result=validateReview(s.quiz_snapshot,review,s.config_snapshot||l.config);await c.query('UPDATE submissions SET review=$1,score=$2,passed=$3,reviewed_at=now() WHERE id=$4',[review,result.score,result.passed,s.id]);
+ if(result.passed){const {rows:[now]}=await c.query('SELECT now() completed');await c.query('UPDATE lessons SET completed_at=$1,next_release_at=$2 WHERE id=$3 AND completed_at IS NULL',[now.completed,nextRelease(now.completed,(s.config_snapshot||l.config).releaseHour),l.id]);const count=await c.query('SELECT count(*)::int n FROM lessons WHERE course_id=$1 AND completed_at IS NOT NULL',[l.course_id]);if(count.rows[0].n>=l.config.totalLessons)await c.query("UPDATE courses SET status='completed',updated_at=now() WHERE id=$1",[l.course_id]);else await c.query('UPDATE courses SET updated_at=now() WHERE id=$1',[l.course_id]);}
+ await event(c,f,'quiz_reviewed',s.id,result);});return redirect(res,'/manage');
+ }
+ m=path.match(/^\/lessons\/([\da-f-]+)\/questions$/);
+ if(m&&uuid.test(m[1])){
+ const question=f.get('question')?.trim();if(!question||question.length>30000)error('问题内容须为1至30000字');
+ await transact(f,async c=>{const {rows:[l]}=await c.query('SELECT * FROM lessons WHERE id=$1',[m[1]]);if(!l?.published_at)error('课时未发布');const parent=f.get('parent_id')||null;if(parent){if(!uuid.test(parent))error('追问编号无效');const {rowCount}=await c.query('SELECT 1 FROM questions WHERE id=$1 AND lesson_id=$2',[parent,l.id]);if(!rowCount)error('追问须属于同一课时');}const id=randomUUID();await c.query('INSERT INTO questions(id,lesson_id,parent_id,operation_id,question) VALUES($1,$2,$3,$4,$5)',[id,l.id,parent,f.get('operation_id'),question]);await event(c,f,'question_asked',id);});return redirect(res,`/lessons/${m[1]}#questions`);
+ }
+ m=path.match(/^\/manage\/questions\/([\da-f-]+)\/answer$/);
+ if(m&&uuid.test(m[1])){const answer=f.get('answer')?.trim();if(!answer)error('回答不能为空');await transact(f,async c=>{const r=await c.query('UPDATE questions SET answer=$1,answered_at=now() WHERE id=$2 AND answered_at IS NULL RETURNING id',[answer,m[1]]);if(!r.rowCount)error('问题已回答或不存在');await event(c,f,'question_answered',m[1]);});return redirect(res,'/manage');}
+ return false;
+ }
+ if(req.method!=='GET')return false;
+ if(path==='/assets/style.css'||path==='/assets/study.js')return false;
+ if(path==='/'){
+ const cs=await q(courseQuery+' ORDER BY c.updated_at DESC');
+ const pending=await q(`SELECT l.*,c.title course_title,s.submitted_at,s.reviewed_at FROM lessons l JOIN courses c ON c.id=l.course_id LEFT JOIN LATERAL (SELECT * FROM submissions WHERE lesson_id=l.id ORDER BY submitted_at DESC LIMIT 1) s ON true WHERE l.published_at IS NOT NULL AND l.completed_at IS NULL ORDER BY l.published_at DESC`);
+ const events=await q('SELECT * FROM study_events ORDER BY created_at DESC LIMIT 8');
+ const questions=await q('SELECT q.*,l.title lesson_title FROM questions q JOIN lessons l ON l.id=q.lesson_id ORDER BY q.created_at DESC LIMIT 3');
+ return render('每一次学习，都留下积累',`<p class="lead">从当前任务开始，沿着清晰的课程路径持续前进。</p><div class="stats"><div><strong>${cs.length}</strong><span>全部课程</span></div><div><strong>${cs.filter(c=>c.status==='active').length}</strong><span>正在学习</span></div><div><strong>${cs.filter(c=>c.status==='completed').length}</strong><span>已完成课程</span></div><div><strong>${pending.filter(l=>!l.submitted_at).length}</strong><span>待完成测验</span></div></div><div class="grid"><section><h2>当前学习任务</h2><div class="panel task">${pending.length?quizRows(pending):empty('暂无待完成课时。课程发布后会出现在这里。')}</div><h2>最近更新课程</h2>${courseRows(cs.slice(0,5))||empty('还没有课程。可在教学管理中创建课程和教学计划。')}</section><aside><h2>最近问答</h2>${questions.map(x=>`<p><a href="/lessons/${x.lesson_id}#questions">${esc(x.question)}</a><br>${badge(x.answered_at?'已回答':'待回答')}</p>`).join('')||empty('学习中的问题会保存在这里。')}<h2>最近学习记录</h2>${events.map(e=>`<p>${esc(eventName(e.action))}<br><small>${time(e.created_at)}</small></p>`).join('')||empty('暂无记录')}</aside></div>`);
+ }
+ if(path==='/courses'){
+ const url=new URL(req.url,'http://localhost'),search=url.searchParams.get('q')||'',cat=url.searchParams.get('category')||'';
+ const cs=await q(courseQuery+" WHERE (c.title ILIKE $1 OR c.description ILIKE $1) AND ($2='' OR c.category=$2) ORDER BY c.updated_at DESC",[`%${search}%`,cat]);const cats=await q('SELECT DISTINCT category FROM courses ORDER BY category');
+ return render('课程中心',`<p class="lead">不同目标，各自的节奏。每门课程独立记录进度与完成规则。</p><form class="search"><label>搜索课程<input name="q" value="${esc(search)}" placeholder="课程名称或学习方向"></label><label>课程类别<select name="category"><option value="">全部类别</option>${cats.map(x=>`<option ${cat===x.category?'selected':''}>${esc(x.category)}</option>`).join('')}</select></label><button>查找</button></form>${courseRows(cs)||empty('没有匹配课程。')}<p><a href="/manage">创建与管理课程 →</a></p>`);
+ }
+ let m=path.match(/^\/courses\/([\da-f-]+)$/);
+ if(m&&uuid.test(m[1])){
+ const [c]=await q(courseQuery+' WHERE c.id=$1',[m[1]]);if(!c)error('课程不存在');const ls=await q('SELECT * FROM lessons WHERE course_id=$1 ORDER BY number',[c.id]);let stage='';
+ return render(c.title,`<p>${badge(c.category)} ${badge(c.status==='completed'?'已完成':'学习中')}</p><p class="lead">${esc(c.description)}</p><div class="panel"><h2>学习目标</h2>${md(c.goals)}<p>已完成 ${c.completed_count} / ${c.config.totalLessons}期 · ${c.config.mode==='completion'?'完成全部测验并获得点评即可晋级':`总分须达到 ${c.config.passScore}，同时满足分项要求`} · 北京时间${c.config.releaseHour}:00发布</p></div><h2>课程目录</h2>${ls.map(l=>{let h='';if(l.stage!==stage){stage=l.stage;h=`<h3>${esc(stage)}</h3>`;}return h+`<div class="row"><div>${l.published_at?`<a href="/lessons/${l.id}">第${l.number}期 · ${esc(l.title)}</a>`:`第${l.number}期 · ${esc(l.title)}`}</div>${badge(status(l))}</div>`;}).join('')||empty('教学目录尚未创建。')}<p class="muted">下一期需在上一期完成后，下一个北京时间发布时点才能发布。</p>`);
+ }
+ m=path.match(/^\/lessons\/([\da-f-]+)$/);
+ if(m&&uuid.test(m[1])){
+ const l=await getLesson(m[1]);if(!l.published_at)error('此课时尚未发布');const ss=await q('SELECT * FROM submissions WHERE lesson_id=$1 ORDER BY submitted_at DESC',[l.id]);const latest=ss[0];const qs=await q('SELECT * FROM questions WHERE lesson_id=$1 ORDER BY created_at',[l.id]);
+ const lessonList=await q('SELECT id,number,title,published_at FROM lessons WHERE course_id=$1 ORDER BY number',[l.course_id]);
+ let quiz='';
+ if(!l.completed_at&&!latest?.reviewed_at&&latest)quiz='<p class="notice">已提交，等待 Work 批改。</p>';
+ else if(!l.completed_at){quiz=`${formStart(`/lessons/${l.id}/submit` ).replace('<form ','<form data-quiz ')}<p class="progress" data-progress>答题进度</p>${l.quiz.map((x,i)=>`<fieldset><legend>${i+1}. ${esc(x.prompt)}</legend>${x.type==='single'?x.options.map((o,j)=>`<label class="option"><input type="radio" name="answer_${esc(x.id)}" value="${j}" required>${String.fromCharCode(65+j)}. ${esc(o)}</label>`).join(''):`<label>你的回答<textarea name="answer_${esc(x.id)}" rows="7" maxlength="30000" required></textarea></label>`}</fieldset>`).join('')}<p class="muted">提交前可修改，全部作答后统一提交；提交后保存完整答卷等待点评。</p><button type="submit">提交全部答案</button></form>`;}
+ const reviews=ss.map((s,i)=>`<details ${i===0?'open':''}><summary>第${ss.length-i}次提交 · ${time(s.submitted_at)} · ${s.reviewed_at?'已点评':'待批改'}</summary>${s.quiz_snapshot.map((x,n)=>{const r=s.review?.items.find(v=>v.id===x.id);return `<div class="panel"><strong>${n+1}. ${esc(x.prompt)}</strong><p>你的答案：${esc(x.type==='single'?x.options[s.answers[x.id]]:s.answers[x.id])}</p>${s.reviewed_at?`<p>得分：${r?.score} / ${x.points}</p>${x.type==='single'?`<p>正确答案：${esc(x.options[x.correct])}</p>${md(x.explanation||'')}`:''}${md(r?.feedback||'')}`:''}</div>`;}).join('')}${s.reviewed_at?`<h3>本期点评 · ${s.score} / 100</h3>${md(s.review.summary)}<h3>知识盲区</h3>${md(s.review.blindSpots)}<h3>改进建议</h3>${md(s.review.suggestions)}<p>${badge(s.passed?'本期已完成':'尚未满足完成条件，可重新作答')}</p>`:''}</details>`).join('');
+ return render(l.title,`<p><a href="/courses/${l.course_id}">${esc(l.course_title)} / 课程目录</a> · <a href="/manage/lessons/${l.id}/edit">维护课时</a></p><div class="reading"><small>${esc(l.stage)} · 第${l.number}期 · ${badge(status(l))}</small><article>${md(l.content)}</article><section id="quiz"><h2>本期测验</h2>${quiz}${reviews}${l.completed_at?`<p class="notice">本期完成于 ${time(l.completed_at)}。下一期最早发布：${time(l.next_release_at)}。</p>`:''}</section><section id="questions">${qs.length?`<h2>本期学习问答</h2>${qs.map(x=>`<div class="panel"><small>${time(x.created_at)}${x.parent_id?' · 追问':''}</small><h3>${esc(x.question)}</h3>${x.answer?md(x.answer):badge('待回答')}${x.answer?`<small>回答于 ${time(x.answered_at)}</small>`:''}</div>`).join('')}`:''}<h2>提出问题</h2>${formStart(`/lessons/${l.id}/questions`)}<label>关联追问<select name="parent_id"><option value="">新问题</option>${qs.map(x=>`<option value="${x.id}">${esc(x.question.slice(0,60))}</option>`).join('')}</select></label>${area('问题内容','question','',4)}<button>保存问题，等待 Work 回答</button></form></section><div class="actions">${lessonList.filter(x=>x.published_at&&Math.abs(x.number-l.number)===1).map(x=>`<a class="button secondary" href="/lessons/${x.id}">${x.number<l.number?'上一期':'下一期'}：${esc(x.title)}</a>`).join('')}</div></div>`);
+ }
+ if(path==='/quizzes'){
+ const rows=await q(`SELECT l.*,c.title course_title,s.submitted_at,s.reviewed_at FROM lessons l JOIN courses c ON c.id=l.course_id LEFT JOIN LATERAL (SELECT * FROM submissions WHERE lesson_id=l.id ORDER BY submitted_at DESC LIMIT 1) s ON true WHERE l.published_at IS NOT NULL ORDER BY l.published_at DESC`);
+ return render('测验中心',`<p class="lead">完整作答，获得点评，让知识成为自己的能力。</p>${quizRows(rows)||empty('课程发布后，在这里查看测验。')}`);
+ }
+ if(path==='/questions'){
+ const rows=await q('SELECT q.*,l.title lesson_title,c.title course_title FROM questions q JOIN lessons l ON l.id=q.lesson_id JOIN courses c ON c.id=l.course_id ORDER BY q.created_at DESC');
+ return render('学习问答',rows.map(x=>`<div class="panel"><small>${esc(x.course_title)} / ${esc(x.lesson_title)} · ${time(x.created_at)}</small><h3><a href="/lessons/${x.lesson_id}#questions">${esc(x.question)}</a></h3>${x.answer?md(x.answer):badge('待回答')}</div>`).join('')||empty('在课程学习页提出问题，回答及追问会长期保存在这里。'));
+ }
+ if(path==='/archive'){
+ const cs=await q(courseQuery+' ORDER BY c.created_at');const rows=await q('SELECT l.*,c.title course_title FROM lessons l JOIN courses c ON c.id=l.course_id ORDER BY c.created_at,l.number');const events=await q('SELECT * FROM study_events ORDER BY created_at DESC LIMIT 100');
+ return render('学习档案',`<h2>课程学习历史</h2>${courseRows(cs)||empty('尚无课程记录')}<h2>课时进度</h2><table><tr><th>课程 / 课时</th><th>发布</th><th>完成</th><th>状态</th></tr>${rows.map(l=>`<tr><td>${esc(l.course_title)}<br>第${l.number}期 ${esc(l.title)}</td><td>${time(l.published_at)}</td><td>${time(l.completed_at)}</td><td>${status(l)}</td></tr>`).join('')}</table><h2>最近100条执行记录</h2>${events.map(e=>`<div class="row"><div>${esc(eventName(e.action))}<br><small>${esc(e.operation_id)}</small></div><small>${time(e.created_at)}</small></div>`).join('')||empty('暂无执行记录')}`);
+ }
+ if(path==='/manage'){
+ const cs=await q(courseQuery+' ORDER BY c.created_at');const pending=await q('SELECT s.*,l.title,l.number,c.title course_title FROM submissions s JOIN lessons l ON l.id=s.lesson_id JOIN courses c ON c.id=l.course_id WHERE s.reviewed_at IS NULL ORDER BY s.submitted_at');const questions=await q('SELECT q.*,l.title FROM questions q JOIN lessons l ON l.id=q.lesson_id WHERE q.answered_at IS NULL ORDER BY q.created_at');const drafts=await q('SELECT l.*,c.title course_title FROM lessons l JOIN courses c ON c.id=l.course_id WHERE l.published_at IS NULL ORDER BY c.created_at,l.number');
+ return render('Work 教学管理',`<p class="notice">定时无人值守浏览器仍待实测。所有提交在事务完成后保存，操作可在学习档案中追溯。</p><div class="stats"><div><strong>${pending.length}</strong><span>待批改答卷</span></div><div><strong>${questions.length}</strong><span>待回答问题</span></div><div><strong>${drafts.length}</strong><span>待发布课时</span></div></div><h2>待批改测验</h2>${pending.map(s=>`<div class="row"><div><small>${esc(s.course_title)}</small><h3>第${s.number}期 · ${esc(s.title)}</h3></div><a class="button" href="/manage/submissions/${s.id}">读取答卷与批改</a></div>`).join('')||empty('暂无待批改答卷')}<h2>待回答问题</h2>${questions.map(x=>`<div class="panel"><small>${esc(x.title)} · ${time(x.created_at)}</small><h3>${esc(x.question)}</h3><a href="/lessons/${x.lesson_id}#questions">查看课程及问答上下文</a>${formStart(`/manage/questions/${x.id}/answer`)}${area('完整回答（Markdown）','answer','',8)}<button>保存回答</button></form></div>`).join('')||empty('暂无待回答问题')}<h2>下一期待发布课程</h2>${drafts.map(l=>`<div class="row"><div><small>${esc(l.course_title)}</small><h3>第${l.number}期 · ${esc(l.title)}</h3><a href="/manage/lessons/${l.id}">预览草稿</a></div>${formStart(`/manage/lessons/${l.id}/publish`)}<button>校验条件并发布</button></form></div>`).join('')||empty('暂无课时草稿')}<details><summary>创建课程</summary>${formStart('/manage/courses')}${field('课程名称','title')}${field('课程类别','category')}${area('课程简介','description')}${area('课程目标与教学计划（Markdown）','goals')}${area('独立晋级配置（JSON）','config',JSON.stringify(sampleConfig,null,2),8)}<p class="muted">mode：completion为完成制，score为分数制。分数制设置passScore及sectionMinimums。totalLessons为课程总期数，releaseHour为北京时间发布小时。</p><button>创建课程</button></form></details><details><summary>创建单期课程草稿</summary>${formStart('/manage/lessons')}<label>所属课程<select name="course_id" required><option value="">请选择</option>${cs.map(c=>`<option value="${c.id}">${esc(c.title)}</option>`).join('')}</select></label>${field('期数','number','1','number')}${field('所属阶段','stage')}${field('课时标题','title')}${area('完整教学正文（Markdown，自定义章节结构）','content','',18)}${area('测验题目（JSON）','quiz',JSON.stringify(sampleQuiz,null,2),15)}<p class="muted">支持single单选和text开放题；id须唯一，points总计100；section用于分项评分。single的correct为从0开始的选项编号。</p><button>保存草稿</button></form></details><h2>课程配置维护</h2>${cs.map(c=>`<p><a href="/manage/courses/${c.id}/edit">编辑 ${esc(c.title)} 的配置与教学计划</a></p>`).join('')}<h2>全部课程进度</h2>${courseRows(cs)||empty('尚未创建课程')}<p><a href="/archive">查看完整执行记录</a> · <a href="/work-test">通信测试</a></p>`);
+ }
+ m=path.match(/^\/manage\/courses\/([\da-f-]+)\/edit$/);if(m&&uuid.test(m[1])){const [c]=await q('SELECT * FROM courses WHERE id=$1',[m[1]]);if(!c)error('课程不存在');return render('维护课程配置',`${formStart(`/manage/courses/${c.id}/edit`)}${field('课程名称','title',c.title)}${field('课程类别','category',c.category)}${area('课程简介','description',c.description)}${area('目标与教学计划','goals',c.goals,14)}${area('晋级配置（JSON）','config',JSON.stringify(c.config,null,2),10)}<button>保存配置</button></form><p class="muted">调整晋级规则适用于后续批改，不重新计算已有完成记录。</p>`);}
+ m=path.match(/^\/manage\/lessons\/([\da-f-]+)\/edit$/);if(m&&uuid.test(m[1])){const l=await getLesson(m[1]);return render('维护课时内容',`${formStart(`/manage/lessons/${l.id}/edit`)}${field('课时标题','title',l.title)}${field('阶段','stage',l.stage)}${area('完整教学正文（Markdown）','content',l.content,24)}${area('测验配置（已发布题目须保持不变）','quiz',JSON.stringify(l.quiz,null,2),16)}<button>保存新版本</button></form><p>旧正文版本会保存，已有答卷使用原题目快照。</p>`);}
+ m=path.match(/^\/manage\/lessons\/([\da-f-]+)$/);if(m&&uuid.test(m[1])){const l=await getLesson(m[1]);return render('课程草稿预览',`<p>${esc(l.course_title)} · 第${l.number}期 · ${badge(status(l))}</p><div class="reading"><h2>${esc(l.title)}</h2><article>${md(l.content)}</article><h2>测验配置（含标准答案）</h2><pre>${esc(JSON.stringify(l.quiz,null,2))}</pre></div><a href="/manage/lessons/${l.id}/edit">编辑草稿</a> · <a href="/manage">返回管理</a>`);}
+ m=path.match(/^\/manage\/submissions\/([\da-f-]+)$/);if(m&&uuid.test(m[1])){
+ const [s]=await q('SELECT * FROM submissions WHERE id=$1',[m[1]]);if(!s)error('答卷不存在');const l=await getLesson(s.lesson_id);const reviews={items:s.quiz_snapshot.map(x=>({id:x.id,score:0,feedback:'请填写逐题点评'})),summary:'请填写整体点评',blindSpots:'请填写知识盲区；如无则说明',suggestions:'请填写改进建议'};
+ return render('读取与批改答卷',`<p>${esc(l.course_title)} / 第${l.number}期 · ${esc(l.title)}</p><p>提交时间：${time(s.submitted_at)}；课程规则：<code>${esc(JSON.stringify(s.config_snapshot||l.config))}</code></p><details><summary>查看完整课程正文</summary><article>${md(l.content)}</article></details><h2>完整题目、答案及评分标准</h2><pre>${esc(JSON.stringify({quiz:s.quiz_snapshot,answers:s.answers},null,2))}</pre>${s.reviewed_at?'<p>此答卷已批改。</p>':`${formStart(`/manage/submissions/${s.id}/review`)}${area('逐题点评与评分（JSON）','review',JSON.stringify(reviews,null,2),24)}<p class="muted">服务器根据题目分值及课程配置判断是否完成；不接受客户端直接指定晋级结果。</p><button>保存点评并更新进度</button></form>`}`);
+ }
+ return false;
+}
+function eventName(name){return ({course_updated:'更新课程配置',lesson_updated:'保存课时新版本',course_created:'创建课程',lesson_drafted:'保存课程草稿',lesson_published:'发布新一期课程',quiz_submitted:'提交测验',quiz_reviewed:'批改测验并更新进度',question_asked:'保存学习问题',question_answered:'保存课程回答'})[name]||name;}
