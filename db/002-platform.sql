@@ -41,3 +41,9 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS history jsonb;
 
 -- Recoverable course deletion; all learning records remain intact.
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS course_requests (
+ id uuid PRIMARY KEY,course_id uuid NOT NULL UNIQUE REFERENCES courses(id),requirements jsonb NOT NULL,
+ status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','ready')),
+ created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+);

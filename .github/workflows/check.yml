@@ -30,6 +30,6 @@ jobs:
           PGUSER: study
           PGPASSWORD: ci-test-only
           PGDATABASE: study
-      - run: node --check server.mjs && node --check platform.mjs && node --check public/study.js
+      - run: node --check server.mjs && node --check platform.mjs && node --check course-requests.mjs && node --check public/study.js
       - run: bash -n scripts/*.sh
       - run: docker build -t chen-study-probe:check .

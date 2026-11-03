@@ -11,3 +11,6 @@ if(directory){
  const updateChapter=()=>{let current=anchors[0];for(const section of anchors){if(section.getBoundingClientRect().top<=150)current=section;else break;}links.forEach(link=>{const active=link.hash===`#${current?.id}`;link.classList.toggle('is-active',active);if(active)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');});};
  let queued=false;addEventListener('scroll',()=>{if(!queued){queued=true;requestAnimationFrame(()=>{updateChapter();queued=false;});}},{passive:true});updateChapter();
 }
+
+const copyHandoff=document.querySelector('[data-copy-handoff]');
+if(copyHandoff)copyHandoff.addEventListener('click',async()=>{const text=document.querySelector('[data-handoff]'),result=document.querySelector('.copy-result');try{await navigator.clipboard.writeText(text.value);result.textContent='已复制';}catch{text.focus();text.select();result.textContent='请复制已选中的指令';}});

@@ -17,7 +17,7 @@ try{
  assert.equal(protectedPage.status,303);assert.equal(protectedPage.headers.get('location'),'/login');
  const login=await fetch('http://127.0.0.1:3000/login',{method:'POST',redirect:'manual',headers:{Origin:'http://127.0.0.1:3000','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({password})});
  assert.equal(login.status,303);assert.equal(login.headers.get('location'),'/');const cookie=login.headers.get('set-cookie').split(';')[0];
- for(const path of ['/','/courses','/archive','/manage','/work-test','/assets/style.css','/assets/study.js']){const r=await fetch('http://127.0.0.1:3000'+path,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(r.status,200,path);}
+ for(const path of ['/','/courses','/archive','/manage','/courses/new','/work-queue','/work-test','/assets/style.css','/assets/study.js']){const r=await fetch('http://127.0.0.1:3000'+path,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(r.status,200,path);}
  for(const path of ['/quizzes','/questions']){const r=await fetch('http://127.0.0.1:3000'+path,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(r.status,303);assert.equal(r.headers.get('location'),'/courses');}
  const loginPage=await (await fetch('http://127.0.0.1:3000/login')).text();assert.match(loginPage,/login-shell/);assert.doesNotMatch(loginPage,/阶段1通信验证/);
  const forbidden=await fetch('http://127.0.0.1:3000/manage/courses',{method:'POST',headers:{Origin:'http://untrusted.invalid',Cookie:cookie},body:''});assert.equal(forbidden.status,403);
