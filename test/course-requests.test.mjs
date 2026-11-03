@@ -10,7 +10,7 @@ test('course request creates one course, resumes work, validates first release a
  const pool={query,connect:async()=>({query,release(){}})};
  async function request(path,method='GET',data={}){const f=new URLSearchParams({...data,csrf:data.csrf||'csrf',operation_id:data.operation_id||randomUUID()});let result={};await platform({req:{method,url:path},res:{},path:path.split('?')[0],pool,csrf:'csrf',send:(_r,status,body)=>{result={status,body};},redirect:(_r,url)=>{result={status:303,url};},form:async()=>f});return result;}
  assert.match((await request('/courses')).body,/创建课程/);
- assert.match((await request('/courses/new')).body,/当前基础/);
+ assert.match((await request('/courses/new')).body,/课程要求/);
  const input={title:'网站创建测试',goals:'学会分析系统',foundation:'零基础',totalLessons:'2',minutes:'40',notes:'包含图例'};
  await assert.rejects(()=>request('/courses/new','POST',{...input,totalLessons:'0'}),/课程期数/);
  const operation_id=randomUUID();const created=await request('/courses/new','POST',{...input,operation_id});
