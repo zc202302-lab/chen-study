@@ -1,7 +1,35 @@
 import {marked} from 'marked';
 import sanitize from 'sanitize-html';
 export const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export const md=s=>sanitize(marked.parse(s||''),{allowedTags:sanitize.defaults.allowedTags.concat(['h1','h2','img','figure','figcaption']),allowedAttributes:{...sanitize.defaults.allowedAttributes,img:['src','alt','title','loading','decoding'],code:['class']},allowedSchemes:['https'],allowProtocolRelative:false,transformTags:{img:(_tag,attrs)=>({tagName:'img',attribs:{...attrs,loading:'lazy',decoding:'async'}})}}).replace(/<p>(<img [^>]*>)<\/p>/g,(_match,img)=>{const caption=img.match(/title="([^"]*)"/);return `<figure>${img}${caption?`<figcaption>${caption[1]}</figcaption>`:''}</figure>`;}).replace(/<table>/g,'<div class="table-scroll"><table>').replace(/<\/table>/g,'</table></div>');
+// Declarative course diagrams render on the server without executable HTML or scripts.
+marked.use({extensions:[{name:'layers',level:'block',start(src){return src.indexOf('```layers');},tokenizer(src){
+ const match=/^```layers[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?:\r?\n|$)/.exec(src);
+ if(match)return {type:'layers',raw:match[0],text:match[1]};
+},renderer(token){
+ try{
+ const data=JSON.parse(token.text);
+ if(!Array.isArray(data.layers)||data.layers.length<1||data.layers.length>30)throw Error('invalid layers');
+ if(data.title!==undefined&&typeof data.title!=='string')throw Error('invalid title');
+ const tones=['blue','purple','teal','gray'];
+ const layers=data.layers.map((x,i)=>{
+ if(!x||typeof x.title!=='string'||!x.title.trim()||(x.description!==undefined&&typeof x.description!=='string'))throw Error('invalid layer');
+ const tone=tones.includes(x.tone)?x.tone:tones[Math.min(i,tones.length-1)];
+ return `<div class="course-layer tone-${tone}"><strong>${esc(x.title)}</strong>${x.description?`<p>${esc(x.description)}</p>`:''}</div>${i<data.layers.length-1?'<div class="layer-arrow" aria-hidden="true">↓</div>':''}`;
+ }).join('');
+ return `<figure class="course-layers" aria-label="${esc(data.title||'分层结构图')}">${data.title?`<figcaption>${esc(data.title)}</figcaption>`:''}${layers}</figure>`;
+ }catch{return `<pre><code class="language-layers">${esc(token.text)}</code></pre><p class="diagram-error">结构图格式有误，请检查 layers 数据。</p>`;}
+}}]});
+export const diagramHelp=`<details class="diagram-help"><summary>插入分层结构图</summary><p class="muted">在正文中使用 layers 代码块。每层支持标题、说明和配色，网站保留上下层级与箭头，手机端自动换行。可使用 blue、purple、teal、gray 配色。</p><pre>\`\`\`layers
+{
+  "title": "系统分层结构",
+  "layers": [
+    {"title": "① 业务应用层", "description": "智能问答、公文助手", "tone": "blue"},
+    {"title": "② 模型服务层", "description": "推理服务与模型", "tone": "purple"},
+    {"title": "③ 基础设施层", "description": "GPU、内存、存储、网络", "tone": "teal"}
+  ]
+}
+\`\`\`</pre></details>`;
+export const md=s=>sanitize(marked.parse(s||''),{allowedTags:sanitize.defaults.allowedTags.concat(['h1','h2','img','figure','figcaption']),allowedClasses:{figure:['course-layers'],div:['course-layer','layer-arrow','tone-blue','tone-purple','tone-teal','tone-gray'],p:['diagram-error']},allowedAttributes:{...sanitize.defaults.allowedAttributes,img:['src','alt','title','loading','decoding'],code:['class'],figure:['class','aria-label'],div:['class'],p:['class']},allowedSchemes:['https'],allowProtocolRelative:false,transformTags:{img:(_tag,attrs)=>({tagName:'img',attribs:{...attrs,loading:'lazy',decoding:'async'}})}}).replace(/<p>(<img [^>]*>)<\/p>/g,(_match,img)=>{const caption=img.match(/title="([^"]*)"/);return `<figure>${img}${caption?`<figcaption>${caption[1]}</figcaption>`:''}</figure>`;}).replace(/<table>/g,'<div class="table-scroll"><table>').replace(/<\/table>/g,'</table></div>');
 export function lessonDocument(content){const headings=[];let index=0;const html=md(content).replace(/<h([23])>([\s\S]*?)<\/h\1>/g,(_match,level,label)=>{const id=`chapter-${++index}`;headings.push({id,level:Number(level),label:label.replace(/<[^>]*>/g,'')});return `<h${level} id="${id}">${label}</h${level}>`;});return {html,headings};}
 
 export const time=d=>d?new Date(d).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
