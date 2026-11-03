@@ -55,6 +55,33 @@ test('database-backed publish, submit, review, duplicate protection, questions, 
  const other=randomUUID();await query('INSERT INTO courses(id,title,category,description,goals,config) VALUES($1,$2,$3,$4,$5,$6)',[other,'其他课程','测试','简介','目标',{mode:'completion',totalLessons:1,releaseHour:9}]);
  assert.doesNotMatch((await request(`/courses/${other}?tab=questions`)).body,/请解释组件边界/);
  assert.doesNotMatch((await request(`/courses/${other}?tab=quiz`)).body,/测试期数/);
+ // Deletion must preserve learning history and block stale reads/writes until restored.
+ assert.match((await request(`/manage/courses/${c}/delete`)).body,/输入完整课程名称/);
+ await assert.rejects(()=>request(`/manage/courses/${c}/delete`,'POST',{confirm_title:'错误名称'}),/课程名称不一致/);
+ const deleteOp=randomUUID();
+ await request(`/manage/courses/${c}/delete`,'POST',{confirm_title:'测试课程',operation_id:deleteOp});
+ await request(`/manage/courses/${c}/delete`,'POST',{confirm_title:'测试课程',operation_id:deleteOp});
+ assert.equal((await query("SELECT * FROM study_events WHERE action='course_deleted'")).rows.length,1);
+ for(const route of ['/','/courses','/archive'])assert.ok(!(await request(route)).body.includes(`href="/courses/${c}"`));
+ await assert.rejects(()=>request(`/courses/${c}`),/课程不存在/);
+ await assert.rejects(()=>request(`/lessons/${l}`),/课时不存在/);
+ await assert.rejects(()=>request(`/manage/lessons/${l}/edit`,'POST',{title:'不应写入',content:'正文',quiz:JSON.stringify(quiz)}),/课程已删除/);
+ await assert.rejects(()=>request(`/lessons/${l}/questions`,'POST',{question:'不应写入'}),/课程已删除/);
+ await assert.rejects(()=>request(`/manage/questions/${question.id}/answer`,'POST',{answer:'不应写入'}),/课程已删除/);
+ await assert.rejects(()=>request(`/manage/submissions/${subs[0].id}/review`,'POST',{review:JSON.stringify(review)}),/课程已删除/);
+ await assert.rejects(()=>request('/manage/lessons','POST',{course_id:c,number:'2',title:'不应写入',content:'正文',quiz:JSON.stringify(quiz)}),/课程已删除/);
+ assert.match((await request('/manage')).body,/恢复课程/);
+ assert.equal((await query('SELECT * FROM submissions')).rows.length,1);
+ assert.equal((await query('SELECT * FROM questions')).rows.length,2);
+ assert.ok((await query('SELECT completed_at FROM lessons WHERE id=$1',[l])).rows[0].completed_at);
+ const restoreOp=randomUUID();
+ await request(`/manage/courses/${c}/restore`,'POST',{operation_id:restoreOp});
+ await request(`/manage/courses/${c}/restore`,'POST',{operation_id:restoreOp});
+ assert.equal((await query("SELECT * FROM study_events WHERE action='course_restored'")).rows.length,1);
+ assert.equal((await request(`/courses/${c}`)).status,200);
+ assert.match((await request(`/lessons/${l}`)).body,/整体掌握/);
+ assert.doesNotMatch((await request('/manage')).body,/>恢复课程</);
+
 
 });
 

@@ -38,3 +38,6 @@ ALTER TABLE submissions ADD COLUMN IF NOT EXISTS config_snapshot jsonb;
 
 -- Historical records preserve date-only evidence without invented submission/completion timestamps.
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS history jsonb;
+
+-- Recoverable course deletion; all learning records remain intact.
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
