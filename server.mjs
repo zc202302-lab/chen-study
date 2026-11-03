@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import pg from 'pg';
 import {equal,sign,validSession} from './security.mjs';
 import {platform} from './platform.mjs';
-import {layout} from './ui.mjs';
+import {layout,loginPage} from './ui.mjs';
 const {SESSION_SECRET,APP_ORIGIN='https://study.ziboxiaozhushou.cn'}=process.env;
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD_B64 ? Buffer.from(process.env.ADMIN_PASSWORD_B64,'base64').toString('utf8') : process.env.ADMIN_PASSWORD;
 if(!ADMIN_PASSWORD||!SESSION_SECRET||SESSION_SECRET.length<32)throw Error('Missing secure configuration');
@@ -23,13 +23,13 @@ const server=http.createServer(async(req,res)=>{
  try{
  if(path==='/healthz'&&req.method==='GET'){await pool.query('SELECT 1');return send(res,200,'ok');}
  if(req.method==='GET'&&(path==='/assets/style.css'||path==='/assets/study.js')){const file=path.endsWith('.css')?'style.css':'study.js';return send(res,200,await readFile(new URL('./public/'+file,import.meta.url)),{'Content-Type':file.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8'});}
- if(req.method==='GET'&&path==='/login')return send(res,200,page('管理登录','<p>个人课程学习平台。请使用服务器上设置的管理密码。</p><form method="post" action="/login"><label>管理密码<input name="password" type="password" autocomplete="current-password" required></label><button>登录</button></form>'));
+ if(req.method==='GET'&&path==='/login')return send(res,200,loginPage());
  if(req.method==='POST'&&req.headers.origin!==APP_ORIGIN)return send(res,403,'来源校验失败');
  if(path==='/login'&&req.method==='POST'){
  const address=req.socket.remoteAddress,now=Date.now();let a=attempts.get(address);
  if(!a||now-a.start>600000){a={start:now,count:0};attempts.set(address,a);}
  if(++a.count>20)return send(res,429,'尝试过多，请十分钟后再试');
- const f=await form(req);if(!equal(f.get('password'),ADMIN_PASSWORD))return send(res,401,page('登录失败','<a href="/login">重新登录</a>'));
+ const f=await form(req);if(!equal(f.get('password'),ADMIN_PASSWORD))return send(res,401,loginPage(true));
  attempts.delete(address);const raw=`${Date.now()+7*86400000}.${randomBytes(16).toString('hex')}`;
  return redirect(res,'/',{'Set-Cookie':`study_session=${raw}.${sign(raw,SESSION_SECRET)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`});
  }
