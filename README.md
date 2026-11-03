@@ -53,3 +53,21 @@ Next.js、TypeScript、Tailwind CSS、PostgreSQL、Docker Compose；GitHub Actio
 Caddyfile为单文件bind挂载：更新时必须考虑原子替换可能导致容器仍引用旧文件的问题；不能只凭宿主机文件内容宣布生效，需核对容器所见内容与运行结果。
 
 GitHub不保存测验答案、问答或进度，不提交密码、私钥、令牌或.env。数据库备份必须包含恢复演练，服务器同盘副本不算异地备份。
+
+## 阶段1测试程序（已编写，尚待服务器实测）
+
+为缩短验证周期，本阶段使用Node.js原生HTTP与pg驱动，不展开Next.js正式平台。该程序不调用任何模型API。登录使用Secure、HttpOnly、SameSite会话Cookie（7天）；写操作校验Origin及CSRF，数据库事务内更新状态和操作日志。重复操作编号不会再次写入，已完成状态仍可记录后续运行以验证定时任务。当前没有重置按钮，避免误改历史；完整并发、持久化和定时验收需部署后执行。
+
+首次部署（服务器终端）：
+
+```bash
+git clone https://github.com/zc202302-lab/chen-study.git /opt/chen-study
+cd /opt/chen-study
+bash scripts/bootstrap.sh
+```
+
+若目录已存在，先检查其内容和Git状态，禁止覆盖。脚本交互设置管理密码，不需要把密码发送到聊天。首次运行需要服务器能访问GitHub、npm与Docker镜像源；下载失败时停止并报告，不修改已有服务。阶段1构建只安装pg驱动，不执行前端编译。CI已配置源码检查、会话测试与镜像构建；自动部署尚未配置，不宣称具备。
+
+独立核验：`bash scripts/verify-db.sh`。查看状态：`docker compose ps`；查看故障：`docker compose logs --tail=80 app db`。不要发送.env内容。备份目录包含既有Caddy配置，须保持私有，不提交GitHub。脚本不删除任何卷、不停止既有项目；健康检查、真实HTTPS访问及已有站点回归需根据实际返回值判定。
+
+通信验证：Work在/work-test登录，读取课程work-test-001，点击完成按钮，刷新核对记录版本和操作编号，再由服务器SQL核验。每日09:00任务须实际执行后方可验收；页面上的下一期解锁仅为测试标记，尚未实现正式发布规则。测试日志包含记录时间，不将页面登录会话误认为已证实定时可用。

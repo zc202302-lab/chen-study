@@ -1,0 +1,58 @@
+name: chen-study
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: study
+      POSTGRES_DB: study
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run bootstrap first}
+    volumes:
+      - study_db:/var/lib/postgresql/data
+    networks: [database]
+    restart: unless-stopped
+    mem_limit: 256m
+    command: [postgres, -c, shared_buffers=32MB, -c, max_connections=20]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U study -d study']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: &logs
+      driver: json-file
+      options: {max-size: '5m', max-file: '3'}
+  app:
+    image: ghcr.io/zc202302-lab/chen-study:phase1
+    build: .
+    environment:
+      PGHOST: db
+      PGUSER: study
+      PGDATABASE: study
+      PGPASSWORD: ${DB_PASSWORD:?Run bootstrap first}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run bootstrap first}
+      SESSION_SECRET: ${SESSION_SECRET:?Run bootstrap first}
+      APP_ORIGIN: https://study.ziboxiaozhushou.cn
+    networks:
+      database: {}
+      proxy:
+        aliases: [chen-study-probe]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 192m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logs
+networks:
+  database:
+    internal: true
+  proxy:
+    external: true
+    name: sms-relay_default
+volumes:
+  study_db:
