@@ -14,3 +14,18 @@ if(directory){
 
 const copyHandoff=document.querySelector('[data-copy-handoff]');
 if(copyHandoff)copyHandoff.addEventListener('click',async()=>{const text=document.querySelector('[data-handoff]'),result=document.querySelector('.copy-result');try{await navigator.clipboard.writeText(text.value);result.textContent='已复制';}catch{text.focus();text.select();result.textContent='请复制已选中的指令';}});
+
+
+const saveRequirements=document.querySelector('[data-save-requirements]');
+if(saveRequirements)saveRequirements.addEventListener('click',async()=>{
+ const form=saveRequirements.form, input=form.elements.courseRequirements, status=document.querySelector('[data-save-requirements-status]');
+ if(!input.value.trim()||input.value.length>16000){status.textContent='课程要求不能为空且不能超过16000字';return;}
+ saveRequirements.disabled=true;status.textContent='正在保存…';
+ try{
+  const data=new URLSearchParams({csrf:form.elements.csrf.value,operation_id:crypto.randomUUID(),courseRequirements:input.value});
+  const response=await fetch('/courses/default-requirements',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:data});
+  if(!response.ok||response.redirected)throw Error('保存失败');
+  status.textContent='已保存为默认值，以后新建课程时使用。';
+ }catch{status.textContent='保存失败，请检查登录状态或稍后重试。';}
+ finally{saveRequirements.disabled=false;}
+});

@@ -49,3 +49,9 @@ CREATE TABLE IF NOT EXISTS course_requests (
 );
 
 ALTER TABLE course_requests ADD COLUMN IF NOT EXISTS automation jsonb NOT NULL DEFAULT '{}';
+
+CREATE TABLE IF NOT EXISTS study_settings (
+  key text PRIMARY KEY,
+  value text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);

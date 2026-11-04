@@ -11,12 +11,20 @@ test('course request creates one course, resumes work, validates first release a
  async function request(path,method='GET',data={}){const f=new URLSearchParams({...data,csrf:data.csrf||'csrf',operation_id:data.operation_id||randomUUID()});let result={};await platform({req:{method,url:path},res:{},path:path.split('?')[0],pool,csrf:'csrf',send:(_r,status,body)=>{result={status,body};},redirect:(_r,url)=>{result={status:303,url};},form:async()=>f});return result;}
  assert.match((await request('/courses')).body,/创建课程/);
  assert.match((await request('/courses/new')).body,/课程要求/);
+ assert.match((await request('/courses/new')).body,/以知识讲授为课程主体/);
+ await assert.rejects(()=>request('/courses/default-requirements','POST',{courseRequirements:'  '}),/不能为空/);
+ await request('/courses/default-requirements','POST',{courseRequirements:'新的默认课程要求'});
+ assert.match((await request('/courses/new')).body,/新的默认课程要求/);
+ await assert.rejects(()=>request('/courses/default-requirements','POST',{courseRequirements:'x'.repeat(16001)}),/16000/);
+
  const input={title:'网站创建测试',goals:'学会分析系统',foundation:'零基础',totalLessons:'2',minutes:'40',notes:'包含图例'};
  await assert.rejects(()=>request('/courses/new','POST',{...input,totalLessons:'0'}),/课程期数/);
  const operation_id=randomUUID();const created=await request('/courses/new','POST',{...input,operation_id});
  const duplicate=await request('/courses/new','POST',{...input,operation_id});assert.equal(duplicate.url,created.url);
  const {rows:[r]}=await query('SELECT * FROM course_requests');assert.equal((await query('SELECT * FROM courses')).rows.length,1);
  assert.equal(r.status,'pending');assert.equal(r.requirements.notes,'包含图例');
+ await request('/courses/default-requirements','POST',{courseRequirements:'另一个默认值'});
+ assert.equal((await query('SELECT requirements FROM course_requests WHERE id=$1',[r.id])).rows[0].requirements.courseRequirements,'包含图例');
  assert.match((await request(created.url)).body,/course_id/);
  assert.match((await request(`/courses/${r.course_id}`)).body,/查看需求与执行指令/);
  assert.match((await request('/work-queue')).body,/网站创建测试/);
@@ -53,3 +61,4 @@ test('course request creates one course, resumes work, validates first release a
  await request(`/manage/courses/${r.course_id}/restore`,'POST');assert.match((await request(created.url)).body,/首期已发布/);
  await assert.rejects(()=>request('/courses/new','POST',{...input,csrf:'wrong'}),/页面已过期/);
 });
+
