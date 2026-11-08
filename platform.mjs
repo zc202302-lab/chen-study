@@ -1,3 +1,4 @@
+import {scheduleOf,nextSlot,scheduleText} from './schedule.mjs';
 import {courseRequests} from './course-requests.mjs';
 import {randomUUID} from 'node:crypto';
 import {esc,md,time,badge,layout,lessonDocument,diagramHelp,hidden,field,area} from './ui.mjs';
@@ -105,7 +106,7 @@ export async function platform({req,res,path,pool,csrf,send,redirect,form}){
  let m=path.match(/^\/manage\/lessons\/([\da-f-]+)\/publish$/);
  if(m&&uuid.test(m[1])){
  await transact(f,async c=>{const {rows:[l]}=await c.query('SELECT l.*,c.config,c.status course_status FROM lessons l JOIN courses c ON c.id=l.course_id AND c.deleted_at IS NULL WHERE l.id=$1 FOR UPDATE OF l,c',[m[1]]);if(!l)error('课时不存在');const {rows:[creation]}=await c.query('SELECT id FROM course_requests WHERE course_id=$1',[l.course_id]);if(creation&&(l.quiz.length!==6||l.quiz.filter(x=>x.type==='single'&&x.points===10).length!==5||l.quiz.filter(x=>x.type==='text'&&x.points===50).length!==1))error('本课程每期须为5道单选题（每题10分）和1道问答题（50分）');if(l.course_status!=='active')error('课程未处于学习中');if(l.published_at)error('已经发布，无需重复发布');
- if(l.number>1){const {rows:[prev]}=await c.query('SELECT * FROM lessons WHERE course_id=$1 AND number=$2',[l.course_id,l.number-1]);if(!prev||!isComplete(prev)||!prev.next_release_at||new Date(prev.next_release_at)>new Date())error('上一期未完成，或尚未到下一个北京时间发布时点');}
+ if(l.number>1){const {rows:[prev]}=await c.query('SELECT * FROM lessons WHERE course_id=$1 AND number=$2',[l.course_id,l.number-1]);if(l.config.schedule){const schedule=scheduleOf(l.config);const {rows:[answer]}=await c.query('SELECT max(submitted_at) submitted FROM submissions WHERE lesson_id=$1',[prev?.id||l.id]);const evidence=answer?.submitted||prev?.completed_at||(prev?.history?`${prev.history.date}T12:00:00+08:00`:null);const base=schedule.mode==='daily'?prev?.published_at:evidence;const {rowCount:already}=await c.query("SELECT 1 FROM lessons WHERE course_id=$1 AND published_at IS NOT NULL AND (published_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date",[l.course_id]);if(!prev?.published_at||!base||new Date()<nextSlot(base,schedule.pushTime)||already)error('尚未满足推送条件、发布时点，或今天已推送');}else if(!prev||!isComplete(prev)||!prev.next_release_at||new Date(prev.next_release_at)>new Date())error('上一期未完成，或尚未到下一个北京时间发布时点');}
  await c.query('UPDATE lessons SET published_at=now() WHERE id=$1',[l.id]);await c.query('UPDATE courses SET updated_at=now() WHERE id=$1',[l.course_id]);await event(c,f,'lesson_published',l.id,{number:l.number});});return redirect(res,'/manage');
  }
  m=path.match(/^\/lessons\/([\da-f-]+)\/submit$/);
