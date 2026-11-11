@@ -7,12 +7,8 @@ command -v curl >/dev/null
 docker network inspect sms-relay_default >/dev/null
 docker inspect sms-relay-caddy-1 >/dev/null
 if [[ ! -f .env ]]; then
-  read -rsp '设置测试管理密码（非空，不限长度和字符类型，仅在服务器输入）: ' study_admin
-  echo
-  [[ -n "$study_admin" ]] || { echo '管理密码不能为空'; exit 1; }
   umask 077
-  { printf 'ADMIN_PASSWORD_B64=%s\n' "$(printf '%s' "$study_admin" | openssl base64 -A)"; printf 'DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"; printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)"; } > .env
-  unset study_admin
+  { printf 'DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"; printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)"; } > .env
 fi
 docker compose config --quiet
 # 阶段1仅安装pg驱动，没有Next.js编译。后续使用CI预构建镜像。
@@ -23,5 +19,5 @@ echo '应用已启动并加载路由；以下为HTTPS实际检查：'
 curl --fail --show-error --retry 5 --retry-delay 3 --max-time 20 https://study.ziboxiaozhushou.cn/healthz
 echo
 bash scripts/verify-db.sh
-echo '请打开 https://study.ziboxiaozhushou.cn/work-test 并使用刚设置的管理密码登录。'
+echo '请打开 https://study.ziboxiaozhushou.cn/work-test ，无需登录。'
 echo '尚未完成Work浏览器或定时运行验收。'

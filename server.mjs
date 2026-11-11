@@ -2,12 +2,11 @@ import http from 'node:http';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import pg from 'pg';
-import {equal,sign,validSession} from './security.mjs';
+import {equal,sign} from './security.mjs';
 import {platform} from './platform.mjs';
-import {layout,loginPage,md} from './ui.mjs';
-const {SESSION_SECRET,APP_ORIGIN='https://study.ziboxiaozhushou.cn'}=process.env;
-const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD_B64 ? Buffer.from(process.env.ADMIN_PASSWORD_B64,'base64').toString('utf8') : process.env.ADMIN_PASSWORD;
-if(!ADMIN_PASSWORD||!SESSION_SECRET||SESSION_SECRET.length<32)throw Error('Missing secure configuration');
+import {layout,md} from './ui.mjs';
+const {APP_ORIGIN='https://study.ziboxiaozhushou.cn'}=process.env;
+const SESSION_SECRET=process.env.SESSION_SECRET||randomBytes(32).toString('hex');
 const pool=new pg.Pool({max:4,connectionTimeoutMillis:5000,statement_timeout:8000});
 pool.on('error',()=>console.error('database_pool_error'));
 await pool.query(await readFile(new URL('./db/001-probe.sql',import.meta.url),'utf8'));
@@ -17,7 +16,6 @@ const page=(title,body)=>`<!doctype html><html lang="zh-CN"><meta charset="utf-8
 function send(res,status,body,headers={}){res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",...headers});res.end(body);}
 function redirect(res,path,headers={}){send(res,303,'',{Location:path,...headers});}
 async function form(req){const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>1048576)throw Error('提交内容超过1MB');parts.push(part);}return new URLSearchParams(Buffer.concat(parts).toString('utf8'));}
-const attempts=new Map();
 const server=http.createServer(async(req,res)=>{
  const path=new URL(req.url,'http://localhost').pathname;
  try{
@@ -29,18 +27,12 @@ const server=http.createServer(async(req,res)=>{
  if(path==='/sync.md')return send(res,200,guide,{'Content-Type':'text/plain; charset=utf-8','X-Robots-Tag':'noindex'});
  return send(res,200,layout('课程同步说明',`<p class="notice">以后告诉 ChatGPT：按 https://study.ziboxiaozhushou.cn/sync 的说明，将本聊天课程同步到网站。</p><p><a href="/sync.md">读取纯文本说明</a></p><div class="reading"><article>${md(guide.replace(/^# .*\n/,''))}</article></div>`),{'X-Robots-Tag':'noindex'});
  }
- if(req.method==='GET'&&path==='/login')return send(res,200,loginPage());
+ if(path==='/login')return redirect(res,'/');
  if(req.method==='POST'&&req.headers.origin!==APP_ORIGIN)return send(res,403,'来源校验失败');
- if(path==='/login'&&req.method==='POST'){
- const address=req.socket.remoteAddress,now=Date.now();let a=attempts.get(address);
- if(!a||now-a.start>600000){a={start:now,count:0};attempts.set(address,a);}
- if(++a.count>20)return send(res,429,'尝试过多，请十分钟后再试');
- const f=await form(req);if(!equal(f.get('password'),ADMIN_PASSWORD))return send(res,401,loginPage(true));
- attempts.delete(address);const raw=`${Date.now()+7*86400000}.${randomBytes(16).toString('hex')}`;
- return redirect(res,'/',{'Set-Cookie':`study_session=${raw}.${sign(raw,SESSION_SECRET)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`});
- }
- const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('study_session='))?.slice(14);
- if(!validSession(token,SESSION_SECRET))return redirect(res,'/login');
+ // Anonymous browser nonce protects forms from cross-site submissions; it is not a login.
+ const existing=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('study_nonce='))?.slice(12);
+ const token=/^[a-f0-9]{64}$/.test(existing||'')?existing:randomBytes(32).toString('hex');
+ if(token!==existing)res.setHeader('Set-Cookie',`study_nonce=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`);
  if(path==='/work-test'&&req.method==='GET'){
  const {rows:[c]}=await pool.query("SELECT * FROM work_probe WHERE id='work-test-001'");
  const {rows:runs}=await pool.query('SELECT * FROM probe_runs ORDER BY created_at DESC LIMIT 12');
