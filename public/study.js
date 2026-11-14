@@ -26,6 +26,20 @@ if(saveRequirements)saveRequirements.addEventListener('click',async()=>{
   const response=await fetch('/courses/default-requirements',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:data});
   if(!response.ok||response.redirected)throw Error('保存失败');
   status.textContent='已保存为默认值，以后新建课程时使用。';
- }catch{status.textContent='保存失败，请检查登录状态或稍后重试。';}
+ }catch{status.textContent='保存失败，请稍后重试。';}
  finally{saveRequirements.disabled=false;}
 });
+
+const requirementsEditor=document.querySelector('#course-requirements-editor');
+const editRequirements=document.querySelector('[data-edit-requirements]');
+if(requirementsEditor&&editRequirements){
+ const state=document.querySelector('[data-editor-state]'),counter=document.querySelector('[data-requirements-count]');
+ const count=()=>{counter.textContent=`${requirementsEditor.value.length.toLocaleString()} / 16,000 字符`;};
+ count();requirementsEditor.addEventListener('input',()=>{count();const status=document.querySelector('[data-save-requirements-status]');if(status)status.textContent='';});
+ editRequirements.addEventListener('click',()=>{
+  requirementsEditor.readOnly=false;requirementsEditor.closest('.requirements-editor').classList.add('is-editing');
+  state.textContent='编辑中';editRequirements.setAttribute('aria-pressed','true');
+  requirementsEditor.focus({preventScroll:true});
+  if(matchMedia('(max-width: 800px)').matches)requirementsEditor.closest('.requirements-editor').scrollIntoView({behavior:'smooth',block:'start'});
+ });
+}
