@@ -28,6 +28,13 @@ test('course request creates one course, resumes work, validates first release a
  assert.match((await request(created.url)).body,/course_id/);
  assert.match((await request(`/courses/${r.course_id}`)).body,/查看需求与执行指令/);
  assert.match((await request('/work-queue')).body,/网站创建测试/);
+ const original=(await query('SELECT requirements FROM course_requests')).rows[0].requirements;
+ await request(created.url+'/requirements','POST',{courseRequirements:'独立保存的课程要求'});
+ const independentlySaved=(await query('SELECT requirements FROM course_requests')).rows[0].requirements;
+ assert.equal(independentlySaved.courseRequirements,'独立保存的课程要求');
+ assert.equal(independentlySaved.goals,original.goals);
+ assert.deepEqual(independentlySaved.schedule,original.schedule);
+ await assert.rejects(()=>request(created.url+'/requirements','POST',{courseRequirements:' '}),/不能为空/);
  await request(created.url+'/edit','POST',{...input,title:'修改后的课程',totalLessons:'3'});
  assert.equal((await query('SELECT config FROM courses')).rows[0].config.totalLessons,3);
  await request(created.url+'/schedule','POST',{gradingTime:'07:30',pushTime:'09:15',reviewTime:'10:30',pushMode:'progress'});
