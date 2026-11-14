@@ -30,6 +30,12 @@ test('course request creates one course, resumes work, validates first release a
  assert.match((await request('/work-queue')).body,/网站创建测试/);
  await request(created.url+'/edit','POST',{...input,title:'修改后的课程',totalLessons:'3'});
  assert.equal((await query('SELECT config FROM courses')).rows[0].config.totalLessons,3);
+ await request(created.url+'/schedule','POST',{gradingTime:'07:30',pushTime:'09:15',reviewTime:'10:30',pushMode:'progress'});
+ assert.equal((await query('SELECT config FROM courses')).rows[0].config.schedule.gradingTime,'07:30');
+ assert.equal((await query('SELECT requirements FROM course_requests')).rows[0].requirements.schedule.gradingTime,'07:30');
+ assert.match((await request(created.url+'/edit')).body,/name="gradingTime" value="07:30"/);
+ await assert.rejects(()=>request(created.url+'/schedule','POST',{gradingTime:'09:15',pushTime:'09:15',reviewTime:'10:30',pushMode:'progress'}),/批改时间/);
+ assert.equal((await query('SELECT config FROM courses')).rows[0].config.schedule.gradingTime,'07:30');
  await request(created.url+'/start','POST');
  await assert.rejects(()=>request(created.url+'/edit','POST',input),/已开始生成/);
  await assert.rejects(()=>request(created.url+'/finish','POST'),/完整目录/);
